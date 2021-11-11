@@ -1,7 +1,5 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Wed Nov  3 22:14:35 2021
 
+"""
 @author: Vetle
 """
 
