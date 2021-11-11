@@ -5,14 +5,11 @@ Created on Wed Nov  3 22:14:35 2021
 @author: Vetle
 """
 
-
+from matplotlib import pyplot as plt
 import random
 import numpy as np
 import noise
 import math
-
-
-
 
 class NoiseMap:
     """
@@ -26,21 +23,17 @@ class NoiseMap:
         self.length = length
         self.wrapping = wrapping
 
-    def gen_perlin_hmap(self, scale, octa, pers, lac, seed):
+
+    def gen_perlin_map(self,scale,octa, pers, lac, seed):
         h_map = np.zeros((self.height, self.length))
         for i in range(self.height):
             for j in range(self.length):
-                if self.wrapping == 'cylinder':
-                    coords = self.cyl_transform(i,j)
-                    z = noise.pnoise3(coords[0]/scale, coords[1]/scale,coords[2]/scale, octaves=octa, \
-                    persistence = pers, lacunarity=lac, repeatx=self.length, repeaty=self.height, repeatz = 1, base= seed)
-                else:
-                    coords = (i,j)
-
-                    z = noise.pnoise2(coords[0]/scale, coords[1]/scale, octaves=octa, \
-                    persistence = pers, lacunarity=lac, repeatx=self.height, base= seed)
+                coords = (i,j)
+                z = noise.snoise2(coords[0]/scale, coords[1]/scale, octaves=octa, \
+                persistence = pers, lacunarity=lac, repeatx=self.height, repeaty = self.length, base= seed)
                 h_map[i][j] = z
-        h_map = self.exp_filter(h_map)
+        h_map = self.exp_transform(h_map)
+        #h_map = self.arctan_transform(h_map)
         h_map = self.normalize_array(h_map)
         return h_map
     
@@ -74,25 +67,44 @@ class NoiseMap:
         grid = np.meshgrid(j,i)
         return grid
 
-    #Exponential filter for noise function
-    def exp_filter(self,h_map):
-        h_map = np.exp(1.5 * h_map)
-        return h_map
-                
+    #Exponential transform for noise function
+    def exp_transform(self,nmap):
+        nmap = np.exp(1.2 * nmap)
+        return nmap
+    
+    def arctan_transform(self, nmap):
+        nmap = np.arctan(nmap/math.pi)
+        return nmap
     
     def normalize_array(self, array):
         array_norm = (array - array.min())/(array.max() - array.min())
         return array_norm
 
-
 class LatMap():
     """
-    Possible future latitude map class
+    Latitude map takes height and length to calculate an array with a distance to the equator
     """
-    def __init__(self, heigth, length):
+    def __init__(self, height, length):
 
         self.height = height
         self.length = length
 
-
-    
+    def gen_lat_map(self, symmetric = True):
+        """
+        Generates a latitude map with values that are smallest towards the pole and smallest close to the equator
+        Range of values are 0-1
+        Generates a latitude map that is symmetric about the equator by default. If not, distance will be relative to the other pole. That is useful for temperature calculations due to inverse season between south and north
+        
+        """
+        i = np.arange(0,self.height)
+        j = np.arange(0,self.length)
+        lat_map = np.meshgrid(j,i)
+        lat_map = lat_map[1]
+        if symmetric is True:
+            lat_map = abs(lat_map - self.height/2)
+        else:
+            lat_map = abs(lat_map - self.height)
+        
+        lat_map = (lat_map - 1) * (-1)          #This inverts the latitude map so that the equator equals 1 and the poles equals zero
+        lat_map = (lat_map - lat_map.min())/(lat_map.max() - lat_map.min())     
+        return lat_map
