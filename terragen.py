@@ -1,3 +1,7 @@
+"""
+@author: Vetle Øye Opheim
+"""
+
 
 import noise
 from PIL import Image
