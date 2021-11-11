@@ -1,10 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Wed Jul 15 18:36:26 2020
-
-@author: Vetle
-"""
-
 
 import noise
 from PIL import Image
@@ -20,7 +13,7 @@ BLANK = [0,0,0]
 DEEP_OCEAN = [30,75,235]
 OCEAN = [65,105,225]
 RIVER = [65,105,240]
-GRASS = [34,139,34]
+FORREST = [34,139,34]
 TROPICAL = [15,180,45]
 SAVANNAH = [230,230,140]
 SAND = [238, 214, 175]
@@ -29,17 +22,19 @@ ICE = [228,238,245]
 MOUNTAIN = [139, 137, 137]
 HIGH_MOUNTAIN = [99,95,95]
 TUNDRA = [152,121,101]
+BORREAL_FORREST = [33,82,16]
 DRY_GRASS = [222,232,86]
 MARSHLAND = [94,181,126]
 
-COLORS = [DEEP_OCEAN,OCEAN, RIVER, GRASS, TROPICAL, SAVANNAH,\
-          SAND, SNOW, ICE, MOUNTAIN, TUNDRA, DRY_GRASS, MARSHLAND]
+COLORS = [DEEP_OCEAN,OCEAN, RIVER, FORREST, TROPICAL, SAVANNAH,\
+          SAND, SNOW, ICE, MOUNTAIN, TUNDRA, DRY_GRASS, MARSHLAND,\
+          BORREAL_FORREST]
 
 
 class Terrain:
     
     def __init__(self, map_height, map_length, scale=128, octaves=7, persistence=0.6, \
-                 lacunarity=2.1, water_level=0.41, freeze_pnt=0.09):
+                 lacunarity=2.1, water_level=0.41, freeze_pnt=0.15):
         """
 
         Parameters
@@ -82,12 +77,9 @@ class Terrain:
         self.freeze_pnt = freeze_pnt
         
         self.beach_zone = self.water_level + 0.05
-        self.flatland_zone = 0.6
-        self.mountain_zone = 1.0
         
         self.seed = random.randint(0,1000)
-        
-        self.lat_map = self.gen_lat_map()
+
         self.h_map = self.gen_hmap()
         #self.temp_map = self.gen_temp_map(12)
         self.humid_map = self.gen_humid_map()
@@ -97,18 +89,15 @@ class Terrain:
     
     def gen_hmap(self):
         noise_map = noisegen.NoiseMap(self.height, self.length)
-        h_map = noise_map.gen_perlin_hmap(self.scale, \
-                                  self.octaves, self.persistence, self.lacunarity, self.seed)
+        h_map = noise_map.gen_perlin_map(128, 7, 0.6, 2.1, self.seed)
         return h_map
                 
     
     #Assign colors to map based on height_map and longitude()
     def gen_terrain_map(self):
         t_map = self.set_terrain_type()
-
         return t_map
     
-        
     #Turn a 2d array of floats into a 3d array to be compatible for masking
     def dimension_transform(self, amap):
         amap = np.reshape(amap, amap.shape +(1,))
@@ -126,7 +115,7 @@ class Terrain:
         return terrain_map
 
     def set_terrain_type(self):
-        temps = self.gen_temp_map(6)
+        temps = self.gen_temp_map(9)        #Temperature in september as the "average" temperature of the year is what will determine the biome
         heights = self.h_map
         humidity = self.humid_map
         terrain_map = np.zeros((self.height, self.length)+(1,))
@@ -135,38 +124,37 @@ class Terrain:
         temps = self.dimension_transform(temps)
         heights = self.dimension_transform(heights)
         humidity = self.dimension_transform(humidity)
-        
-        terrain_map = np.where(heights > 100,OCEAN,GRASS)
-        terrain_map = np.where(humidity  < 0.45,DRY_GRASS,terrain_map)
 
-        terrain_map = np.where(heights < self.water_level,OCEAN,terrain_map)
-        terrain_map = np.where((heights >= self.water_level) & (heights < self.water_level + 0.04),SAND,terrain_map)
-        terrain_map = np.where(heights < self.d_water_level,DEEP_OCEAN,terrain_map)
-        terrain_map = np.where((humidity  > 0.53) & (heights > self.water_level + 0.04) & (heights < 0.6),MARSHLAND,terrain_map)
-        terrain_map = np.where((humidity  > 0.5) & (temps > 0.5)& (heights > self.water_level + 0.04) & (heights < 0.6),TROPICAL,terrain_map)
-        terrain_map = np.where(heights > 0.55,MOUNTAIN,terrain_map)
-        terrain_map = np.where(heights > 0.65,HIGH_MOUNTAIN,terrain_map)
+        terrain_map = np.where(heights > 100,OCEAN,FORREST)
+        #Determine tundra zone
+        terrain_map = np.where((heights > self.beach_zone) & (heights < 0.6) & (temps < 0.15),TUNDRA,terrain_map)
+        #Determine borreal forrest zone
+        terrain_map = np.where((heights > self.beach_zone) & (heights < 0.6) & (temps > 0.15),BORREAL_FORREST,terrain_map)
+        #Determine grassland zone
+        terrain_map = np.where((heights > self.beach_zone) & (heights < 0.6) & (temps > 0.3) & (humidity < 0.3),DRY_GRASS,terrain_map)
+        #Determine temperate forrest zone
+        terrain_map = np.where((heights > self.beach_zone) & (heights < 0.6) & (temps > 0.4) & (humidity < 0.4),FORREST,terrain_map)
+        #Determine marshland zone
+        terrain_map = np.where((heights > self.beach_zone) & (heights < 0.6) & (temps < 0.45) & (humidity > 0.5),MARSHLAND,terrain_map)
+        #Determine rainforrest zone
+        terrain_map = np.where((heights > self.beach_zone) & (heights < 0.6) & (temps > 0.45) & (humidity > 0.5),TROPICAL,terrain_map)
+        #Determine savannah zone
+        terrain_map = np.where((heights > self.beach_zone) & (heights < 0.6) & (temps > 0.45) & (humidity < 0.45),SAVANNAH,terrain_map)
+        #Determine desert zone
+        terrain_map = np.where((heights > self.beach_zone) & (heights < 0.6) & (temps > 0.45) & (humidity < 0.3),SAND,terrain_map)
+        #Determine mountain zone
+        terrain_map = np.where((heights > 0.6),MOUNTAIN,terrain_map)
+        #Determine high mountain zone
+        terrain_map = np.where((heights > 0.75),HIGH_MOUNTAIN,terrain_map)
+        #Determine beach  zone
+        terrain_map = np.where((heights > self.water_level) & (heights <= self.beach_zone),SAND,terrain_map)
+        #Determine ocean  zone
+        terrain_map = np.where((heights > self.d_water_level) & (heights <= self.water_level),OCEAN,terrain_map)
+        #Determine deep ocean  zone
+        terrain_map = np.where((heights < self.d_water_level),DEEP_OCEAN,terrain_map)
         
         return terrain_map
     
-    def gen_lat_map(self, symmetric = True):
-        """
-        Generates a latitude map with values that are smallest towards the pole and smallest close to the equator
-        Range of values are 0-1
-        Generates a latitude map that is symmetric about the equator by default. If not, distance will be relative to the other pole. That is useful for temperature calculations due to inverse season between south and north
-        
-        """
-        i = np.arange(0,self.height)
-        j = np.arange(0,self.length)
-        lat_map = np.meshgrid(j,i)
-        lat_map = lat_map[1]
-        if symmetric is True:
-            lat_map = abs(lat_map - self.height/2)
-        else:
-            lat_map = abs(lat_map - self.height)
-        lat_map = (lat_map - lat_map.min())/(lat_map.max() - lat_map.min())     
-        lat_map = (lat_map - 1) * (-1)          #This inverts the latitude map so that the equator equals 1 and the poles equals zero
-        return lat_map
 
     def gen_temp_map(self, month):
         """
@@ -174,30 +162,24 @@ class Terrain:
         Temperature cycle over the year is modeled by a sine function       
         TODO: Implement offset season for northern and southern hemisphere
         """
-        lat_map = self.lat_map
-        noise_map = (self.h_map - 1) * (-1)
-
-        temp_map = np.multiply(noise_map,lat_map)
-
-        period_coeff = math.pi/365      #Period of the cycle is set to 12
-        offset_coeff = 120                #Offset of sine function set to 4 to make the min value equal to 12
-
-        temp_map = temp_map * (0.8 * math.sin(offset_coeff + period_coeff * month) + 0.8)        
+        temp_map = (self.h_map - 1) * (-1)
+        lat_map = noisegen.LatMap(self.height, self.length)
+        latitude = lat_map.gen_lat_map()
         
-        #period_coeff = math.pi/6       #Period of the cycle is set to 12
-        #offset_coeff = 5                #Offset of sine function set to 4 to make the min value equal to 12
+        temp_map = (temp_map * latitude)
 
-        #temp_map = temp_map * (0.2 * math.sin(offset_coeff + period_coeff * month) + 0.8)
+        #Some lines for daily simulation for a year that has been commented out
+        #period_coeff = math.pi/365      #Period of the cycle is set to 12
+        #offset_coeff = 120                #Offset of sine function set to 4 to make the min value equal to 12
+        #temp_map = temp_map * (0.8 * math.sin(offset_coeff + period_coeff * month) + 0.8)        
         
-        #Add an element of randomness to the temperature
-        randarr = np.random.random((self.height, self.length)) * 0.01
-        #temp_map = temp_map + randarr
+        #Make the temperature cycle with the input month
+        period_coeff = math.pi/6       #Period of the cycle is set to 12
+        offset_coeff = 5                #Offset of sine function set to 4 to make the min value equal to 12
+        temp_map = temp_map * (1 * math.sin(offset_coeff + period_coeff * month) + 0.8)
         
         #Increase temperature over the ocean
-        temp_map = np.where(temp_map < self.water_level, temp_map + 0.1, temp_map)
-
-        #Apply exponential filter
-        temp_map = np.exp(temp_map)
+        #temp_map = np.where(temp_map < self.water_level, temp_map + 0.2, temp_map)
         #Normalize
         temp_map = (temp_map - temp_map.min()) / (temp_map.max() - temp_map.min())
         return temp_map
@@ -207,13 +189,13 @@ class Terrain:
         Generates a humidity map based on the height map
         Humidity is inversely related to height so that areas with ocean or close to the ocean gets more humidity
         """
+
         humid_map = np.zeros((self.height, self.length))
-        humid_map = (self.h_map - 1) * (-1)
-        #Add an element of randomness to the humidity
-        #randarr = np.random.random((self.height, self.length)) + 0.01
-        #humid_map = humid_map + randarr
-        #Interpolate the humidity map to smooth thins
-        humid_map = self.map_interp(humid_map, 3)
+        #humid_map = (self.h_map - 1) * (-1)
+        noise_map = noisegen.NoiseMap(self.height, self.length)
+        humid_map = noise_map.gen_perlin_map(16,3,0.7,2.0, self.seed)
+
+        #Normalize
         humid_map = (humid_map - humid_map.min())/(humid_map.max() - humid_map.min())
 
         return humid_map
@@ -236,4 +218,7 @@ class Terrain:
         
         return interp_map
 
-    
+class Climate:
+
+    def __init__(self, h_map):
+        pass
