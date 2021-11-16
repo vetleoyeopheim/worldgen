@@ -3,7 +3,7 @@
 @author: Vetle
 """
 
-from matplotlib import pyplot as plt
+
 import random
 import numpy as np
 import noise
@@ -21,14 +21,13 @@ class NoiseMap:
         self.length = length
         self.wrapping = wrapping
 
-
-    def gen_perlin_map(self,scale,octa, pers, lac, seed):
+    def gen_simplex_map(self,scale,octa, pers, lac, seed):
         h_map = np.zeros((self.height, self.length))
         for i in range(self.height):
             for j in range(self.length):
                 coords = (i,j)
                 z = noise.snoise2(coords[0]/scale, coords[1]/scale, octaves=octa, \
-                persistence = pers, lacunarity=lac, repeatx=self.height, repeaty = self.length, base= seed)
+                persistence = pers, lacunarity=lac, repeatx=self.length, repeaty = self.length, base= seed)
                 h_map[i][j] = z
         h_map = self.exp_transform(h_map)
         #h_map = self.arctan_transform(h_map)
@@ -67,7 +66,7 @@ class NoiseMap:
 
     #Exponential transform for noise function
     def exp_transform(self,nmap):
-        nmap = np.exp(1.2 * nmap)
+        nmap = np.exp(2 * nmap)
         return nmap
     
     def arctan_transform(self, nmap):
@@ -77,6 +76,7 @@ class NoiseMap:
     def normalize_array(self, array):
         array_norm = (array - array.min())/(array.max() - array.min())
         return array_norm
+
 
 class LatMap():
     """
@@ -91,7 +91,9 @@ class LatMap():
         """
         Generates a latitude map with values that are smallest towards the pole and smallest close to the equator
         Range of values are 0-1
-        Generates a latitude map that is symmetric about the equator by default. If not, distance will be relative to the other pole. That is useful for temperature calculations due to inverse season between south and north
+        Generates a latitude map that is symmetric about the equator by default.
+        Non-symmetric latitude map has not been implemented yet
+        If not, distance will be relative to the other pole. That is useful for temperature calculations due to inverse season between south and north
         
         """
         i = np.arange(0,self.height)
