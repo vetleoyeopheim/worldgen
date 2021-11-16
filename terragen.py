@@ -37,7 +37,7 @@ COLORS = [DEEP_OCEAN,OCEAN, RIVER, FORREST, TROPICAL, SAVANNAH,\
 
 class Terrain:
     
-    def __init__(self, map_height, map_length, scale=128, octaves=7, persistence=0.6, \
+    def __init__(self, map_height, map_length, octaves=7, persistence=0.6, \
                  lacunarity=2.1, water_level=0.41, freeze_pnt=0.15):
         """
 
@@ -63,19 +63,11 @@ class Terrain:
         """
         self.height = map_height
         self.length = map_length
-        self.scale = scale
+        self.scale = self.length / 4
         self.octaves = octaves
         self.persistence = persistence
         self.lacunarity = lacunarity
             
-        self.n_polar = self.height * 0.1
-        self.n_tundra = self.height * 0.15
-        self.n_temp = self.height * 0.35
-        self.trop = self.height * 0.65
-        self.s_temp = self.height * 0.85
-        self.s_tundra = self.height * 0.9
-        self.s_polar = self.height * 1.0
-        
         self.water_level = water_level
         self.d_water_level = self.water_level - 0.1         #Deep water
         self.freeze_pnt = freeze_pnt
@@ -85,7 +77,8 @@ class Terrain:
         self.seed = random.randint(0,1000)
 
         self.h_map = self.gen_hmap()
-        #self.temp_map = self.gen_temp_map(12)
+        self.surf_hmap = self.surface_hmap()
+        self.temp_map = self.gen_temp_map(9)    #The standard temperature map
         self.humid_map = self.gen_humid_map()
         
         self.terr_base = self.gen_terrain_map()         #Basis terrain before ice and snow (temperature effects) are added
@@ -93,8 +86,16 @@ class Terrain:
     
     def gen_hmap(self):
         noise_map = noisegen.NoiseMap(self.height, self.length)
-        h_map = noise_map.gen_perlin_map(128, 7, 0.6, 2.1, self.seed)
+        h_map = noise_map.gen_simplex_map(128, 7, 0.6, 2.1, self.seed)
         return h_map
+
+    def surface_hmap(self):
+        """
+        The surface height map is the regular height map but with heights over water equal to the water level
+        This ensures that the oceans are completely flat, and can thereby be used for calculations of wind flow
+        """
+        surf_hmap = np.where(self.h_map <= self.water_level, self.water_level, self.h_map)
+        return surf_hmap
                 
     
     #Assign colors to map based on height_map and longitude()
@@ -131,9 +132,9 @@ class Terrain:
 
         terrain_map = np.where(heights > 100,OCEAN,FORREST)
         #Determine tundra zone
-        terrain_map = np.where((heights > self.beach_zone) & (heights < 0.6) & (temps < 0.15),TUNDRA,terrain_map)
+        terrain_map = np.where((heights > self.beach_zone) & (heights < 0.6) & (temps < 0.2),TUNDRA,terrain_map)
         #Determine borreal forrest zone
-        terrain_map = np.where((heights > self.beach_zone) & (heights < 0.6) & (temps > 0.15),BORREAL_FORREST,terrain_map)
+        terrain_map = np.where((heights > self.beach_zone) & (heights < 0.6) & (temps > 0.2),BORREAL_FORREST,terrain_map)
         #Determine grassland zone
         terrain_map = np.where((heights > self.beach_zone) & (heights < 0.6) & (temps > 0.3) & (humidity < 0.3),DRY_GRASS,terrain_map)
         #Determine temperate forrest zone
@@ -141,11 +142,11 @@ class Terrain:
         #Determine marshland zone
         terrain_map = np.where((heights > self.beach_zone) & (heights < 0.6) & (temps < 0.45) & (humidity > 0.5),MARSHLAND,terrain_map)
         #Determine rainforrest zone
-        terrain_map = np.where((heights > self.beach_zone) & (heights < 0.6) & (temps > 0.45) & (humidity > 0.5),TROPICAL,terrain_map)
+        terrain_map = np.where((heights > self.beach_zone) & (heights < 0.6) & (temps > 0.45) & (humidity > 0.35),TROPICAL,terrain_map)
         #Determine savannah zone
-        terrain_map = np.where((heights > self.beach_zone) & (heights < 0.6) & (temps > 0.45) & (humidity < 0.45),SAVANNAH,terrain_map)
+        terrain_map = np.where((heights > self.beach_zone) & (heights < 0.6) & (temps > 0.45) & (humidity > 0.35),SAVANNAH,terrain_map)
         #Determine desert zone
-        terrain_map = np.where((heights > self.beach_zone) & (heights < 0.6) & (temps > 0.45) & (humidity < 0.3),SAND,terrain_map)
+        terrain_map = np.where((heights > self.beach_zone) & (heights < 0.6) & (temps > 0.45) & (humidity < 0.25),SAND,terrain_map)
         #Determine mountain zone
         terrain_map = np.where((heights > 0.6),MOUNTAIN,terrain_map)
         #Determine high mountain zone
@@ -180,10 +181,10 @@ class Terrain:
         #Make the temperature cycle with the input month
         period_coeff = math.pi/6       #Period of the cycle is set to 12
         offset_coeff = 5                #Offset of sine function set to 4 to make the min value equal to 12
-        temp_map = temp_map * (1 * math.sin(offset_coeff + period_coeff * month) + 0.8)
+        #temp_map = temp_map * (2 * math.sin(offset_coeff + period_coeff * month) + 0.8)
         
         #Increase temperature over the ocean
-        #temp_map = np.where(temp_map < self.water_level, temp_map + 0.2, temp_map)
+        temp_map = np.where(self.h_map < self.water_level, temp_map + 0.05, temp_map)
         #Normalize
         temp_map = (temp_map - temp_map.min()) / (temp_map.max() - temp_map.min())
         return temp_map
@@ -193,20 +194,16 @@ class Terrain:
         Generates a humidity map based on the height map
         Humidity is inversely related to height so that areas with ocean or close to the ocean gets more humidity
         """
-
-        humid_map = np.zeros((self.height, self.length))
-        #humid_map = (self.h_map - 1) * (-1)
-        noise_map = noisegen.NoiseMap(self.height, self.length)
-        humid_map = noise_map.gen_perlin_map(16,3,0.7,2.0, self.seed)
+        humid_map = np.exp((self.h_map - 1) * (-1))
 
         #Normalize
         humid_map = (humid_map - humid_map.min())/(humid_map.max() - humid_map.min())
 
         return humid_map
     
-    #slope(gradient) map of the height map
-    def get_slope_map(self):
-        slope_map = np.gradient(self.h_map)
+    #slope(gradient) map of a height map
+    def get_slope_map(self, amap):
+        slope_map = np.gradient(amap)
         
         return slope_map
 
@@ -221,6 +218,76 @@ class Terrain:
             interp_map = interp(i,j)
         
         return interp_map
+
+
+    def wind_flow(self):
+        """
+        STILL EXPERIMENTAL
+        Calculate a wind flow map based on a 2D Burgers equation
+        Calculations are based on the height map. A negative slope accelerates wind speed due to gravity (g). Opposite is true for upward facing slopes
+        Uses conservation of mass principle
+        Equations are:
+            dv_dx = -du_dy - g * s_x(x,y)
+            du_dy = -dv_dx - g * s_y(x,y)
+        """
+        latmap = noisegen.LatMap(self.height, self.length)
+        surface = self.surf_hmap
+        slopes = self.get_slope_map(surface)
+        latitude = latmap.gen_lat_map() * (-1)
+        T = 6
+        t = 1
+        g = 9.8
+        v = 0.25
+        h = 0.1
+
+        wind_x = np.zeros((T, self.height, self.length))
+        wind_x[0] = 1
+        wind_y = np.zeros((T, self.height, self.length))
+        wind_y[0] = 0
+
+        while t < T:
+            i = 0
+            v_arr = np.zeros((self.height, self.length))
+            u_arr = np.zeros((self.height, self.length))
+            temp_map = self.gen_temp_map(t)     #Generate the temperature map for the month
+            temp_gradient = self.get_slope_map(temp_map)       #Calculate the temperature gradient
+            while i < self.height - 1:
+                j = 0
+                v_row = np.zeros(self.length)
+                u_row = np.zeros(self.length)
+                while j < self.length - 1:
+                    if j == 0:
+                        vx = 0
+                        vy = 0
+                    elif j == self.length:
+                        vx = 0
+                        vy = 0
+                    elif i == 0:
+                        vx = 0
+                        vy = 0
+                    elif i == self.height:
+                        vx = 0
+                        vy = 0
+                    else:             
+                        vx = wind_x[t - 1][i][j]\
+                           - wind_x[t - 1][i][j] * (wind_x[t - 1][i][j] - wind_x[t - 1][i - 1][j])\
+                           - wind_y[t - 1][i][j] * (wind_x[t - 1][i][j] - wind_x[t - 1][i][j - 1])\
+                           - g * slopes[0][i][j] - h * temp_gradient[0][i][j] + h * temp_map[i][j]
+
+                        vy = wind_y[t - 1][i][j]\
+                           - wind_y[t - 1][i][j] * (wind_y[t - 1][i][j] - wind_y[t - 1][i][j - 1])\
+                           - wind_x[t - 1][i][j] * (wind_y[t - 1][i][j] - wind_y[t - 1][i - 1][j])\
+                           - g * slopes[1][i][j] - h * temp_gradient[1][i][j] + h * temp_map[i][j]
+                    v_row[j] = vx
+                    u_row[j] = vy
+                    j += 1
+                v_arr[i] = v_row
+                u_arr[i] = u_row
+                i += 1
+            wind_x[t] = v_arr
+            wind_y[t] = u_arr
+            t += 1
+        return wind_x, wind_y
 
 class Climate:
 
