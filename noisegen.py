@@ -21,19 +21,38 @@ class NoiseMap:
         self.length = length
         self.wrapping = wrapping
 
-    def gen_simplex_map(self,scale,octa, pers, lac, seed):
+    def testgen_simplex_map(self,scale,octa, pers, lac, seed):
         h_map = np.zeros((self.height, self.length))
+        sec_map = np.zeros((self.height, self.length))  #Secondary height map to be multiplied to main map
         for i in range(self.height):
             for j in range(self.length):
                 coords = (i,j)
                 z = noise.snoise2(coords[0]/scale, coords[1]/scale, octaves=octa, \
-                persistence = pers, lacunarity=lac, repeatx=self.length, repeaty = self.length, base= seed)
+                persistence = pers, lacunarity=lac, base= seed)
+                h_map[i][j] = z
+                q = noise.snoise2(coords[0]/scale, coords[1]/scale, octaves=4, \
+                persistence = 1.9, lacunarity=0.6, base= seed)
+                sec_map[i][j] = q
+        h_map = h_map + sec_map
+        h_map = self.exp_transform(h_map)
+        #h_map = self.arctan_transform(h_map)
+        h_map = self.normalize_array(h_map)
+        return h_map
+
+    def gen_simplex_map(self,scale,octa, pers, lac, seed):
+        h_map = np.zeros((self.height, self.length))
+
+        for i in range(self.height):
+            for j in range(self.length):
+                coords = (i,j)
+                z = noise.snoise2(coords[0]/scale, coords[1]/scale, octaves=octa, \
+                persistence = pers, lacunarity=lac, base= seed)
                 h_map[i][j] = z
         h_map = self.exp_transform(h_map)
         #h_map = self.arctan_transform(h_map)
         h_map = self.normalize_array(h_map)
         return h_map
-    
+   
     def cyl_transform(self, i,j):
         """
         Applies a cylindrical transform to the noise map so that it will wrap around itself
@@ -66,7 +85,7 @@ class NoiseMap:
 
     #Exponential transform for noise function
     def exp_transform(self,nmap):
-        nmap = np.exp(2 * nmap)
+        nmap = np.exp(1.5 * nmap)
         return nmap
     
     def arctan_transform(self, nmap):
@@ -108,3 +127,7 @@ class LatMap():
         lat_map = (lat_map - 1) * (-1)          #This inverts the latitude map so that the equator equals 1 and the poles equals zero
         lat_map = (lat_map - lat_map.min())/(lat_map.max() - lat_map.min())     
         return lat_map
+
+    def invert_map(self, amap):
+        amap = (amap - 1) * (-1)          #This inverts the latitude map so that the equator equals 1 and the poles equals zero
+        return amap
