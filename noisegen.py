@@ -3,11 +3,11 @@
 @author: Vetle
 """
 
-
 import random
 import numpy as np
 import noise
 import math
+from scipy.ndimage import sobel
 
 class NoiseMap:
     """
@@ -16,46 +16,33 @@ class NoiseMap:
         wrapping: either cylinder or plane. Cylinder makes the noise wrap around itself, but is TODO for now
         
     """
-    def __init__(self, height, length, algo = 'perlin', wrapping = 'plane'):
+    def __init__(self, height, length, exp_factor = 1, wrapping = 'plane'):
         self.height = height
         self.length = length
         self.wrapping = wrapping
-
-    def testgen_simplex_map(self,scale,octa, pers, lac, seed):
-        h_map = np.zeros((self.height, self.length))
-        sec_map = np.zeros((self.height, self.length))  #Secondary height map to be multiplied to main map
-        for i in range(self.height):
-            for j in range(self.length):
-                coords = (i,j)
-                z = noise.snoise2(coords[0]/scale, coords[1]/scale, octaves=octa, \
-                persistence = pers, lacunarity=lac, base= seed)
-                h_map[i][j] = z
-                q = noise.snoise2(coords[0]/scale, coords[1]/scale, octaves=4, \
-                persistence = 1.9, lacunarity=0.6, base= seed)
-                sec_map[i][j] = q
-        h_map = h_map + sec_map
-        h_map = self.exp_transform(h_map)
-        #h_map = self.arctan_transform(h_map)
-        h_map = self.normalize_array(h_map)
-        return h_map
+        self.exp_factor = exp_factor
 
     def gen_simplex_map(self,scale,octa, pers, lac, seed):
         h_map = np.zeros((self.height, self.length))
-
+        
         for i in range(self.height):
             for j in range(self.length):
                 coords = (i,j)
                 z = noise.snoise2(coords[0]/scale, coords[1]/scale, octaves=octa, \
-                persistence = pers, lacunarity=lac, base= seed)
+                persistence = pers, lacunarity=lac, repeatx = self.height / 2, repeaty = self.length, base= seed)
                 h_map[i][j] = z
+        
+        h_map = self.arctan_transform(h_map)
         h_map = self.exp_transform(h_map)
-        #h_map = self.arctan_transform(h_map)
+        
+        #h_map = self.sobel_filter(h_map)
         h_map = self.normalize_array(h_map)
         return h_map
    
     def cyl_transform(self, i,j):
         """
         Applies a cylindrical transform to the noise map so that it will wrap around itself
+        Not at all finished
         """
         tau = 2 * math.pi
         angle_x = tau * i
@@ -83,13 +70,21 @@ class NoiseMap:
         grid = np.meshgrid(j,i)
         return grid
 
+    def sobel_filter(self, nmap):
+        """
+        Calculate a sobel filter for the noise map and add it back to the noise map
+        """
+        sob_filter = sobel(nmap)
+        sob_filter = self.normalize_array(sob_filter)
+        return(nmap + 0.2 * sob_filter)
+
     #Exponential transform for noise function
     def exp_transform(self,nmap):
-        nmap = np.exp(1.5 * nmap)
+        nmap = np.exp(self.exp_factor * nmap)
         return nmap
     
     def arctan_transform(self, nmap):
-        nmap = np.arctan(nmap/math.pi)
+        nmap = np.arctan(5*nmap/math.pi)
         return nmap
     
     def normalize_array(self, array):
@@ -106,7 +101,7 @@ class LatMap():
         self.height = height
         self.length = length
 
-    def gen_lat_map(self, symmetric = True):
+    def gen_lat_map(self, symmetric = True, invert = True):
         """
         Generates a latitude map with values that are smallest towards the pole and smallest close to the equator
         Range of values are 0-1
@@ -124,10 +119,12 @@ class LatMap():
         else:
             lat_map = abs(lat_map - self.height)
         
-        lat_map = (lat_map - 1) * (-1)          #This inverts the latitude map so that the equator equals 1 and the poles equals zero
+        if invert:
+            lat_map = self.invert_map(lat_map)
+
         lat_map = (lat_map - lat_map.min())/(lat_map.max() - lat_map.min())     
         return lat_map
 
     def invert_map(self, amap):
-        amap = (amap - 1) * (-1)          #This inverts the latitude map so that the equator equals 1 and the poles equals zero
+        amap = (amap - 1.0) * (-1.0)          #This inverts the latitude map so that the equator equals 1 and the poles equals zero
         return amap
