@@ -1,8 +1,3 @@
-
-"""
-@author: Vetle
-"""
-
 import random
 import numpy as np
 import noise
@@ -32,10 +27,11 @@ class NoiseMap:
                 persistence = pers, lacunarity=lac, repeatx = self.height / 2, repeaty = self.length, base= seed)
                 h_map[i][j] = z
         
-        h_map = self.arctan_transform(h_map)
+        #h_map = self.sobel_filter(h_map)
+        #h_map = self.arctan_transform(h_map)
         h_map = self.exp_transform(h_map)
         
-        #h_map = self.sobel_filter(h_map)
+        
         h_map = self.normalize_array(h_map)
         return h_map
    
@@ -76,7 +72,7 @@ class NoiseMap:
         """
         sob_filter = sobel(nmap)
         sob_filter = self.normalize_array(sob_filter)
-        return(nmap + 0.2 * sob_filter)
+        return(nmap + 0.3 * sob_filter)
 
     #Exponential transform for noise function
     def exp_transform(self,nmap):
@@ -84,13 +80,29 @@ class NoiseMap:
         return nmap
     
     def arctan_transform(self, nmap):
-        nmap = np.arctan(5*nmap/math.pi)
+        nmap = np.arctan(15*nmap/math.pi)
         return nmap
     
     def normalize_array(self, array):
         array_norm = (array - array.min())/(array.max() - array.min())
         return array_norm
 
+class LandMap():
+    """
+    Generates a map array with zeros for ocean pixels and ones for land pixels based on a height map and water level
+
+    """
+    def __init__(self, height, length, h_map, water_lev):
+        self.height = height
+        self.length = length
+        self.h_map = h_map
+        self.water_lev = water_lev
+
+    def gen_land_map(self):
+        land_map = np.zeros((self.height, self.length))
+        land_map = np.where(self.h_map >= self.water_lev, 1, land_map)
+
+        return land_map
 
 class LatMap():
     """
