@@ -65,7 +65,7 @@ class Terrain:
     Together with the height map, the climate determines the biomes on the map
     """   
     def __init__(self, height, length, periods, octaves=6, persistence=0.61, \
-                 lacunarity=2.3, water_lev=0.35, freeze_pnt=0.2):
+                 lacunarity=2.3, water_lev=0.35, freeze_pnt=0.15):
         """
 
         Parameters
@@ -189,8 +189,8 @@ class Terrain:
             -humidity
         """
         
-        temps = self.climate.avg_temp
-        humidity = self.climate.avg_humidity
+        temps = self.climate.temps[1]
+        humidity = self.climate.humidity[1]
         terrain_map = np.zeros((self.height, self.length)+(1,))
         
         #Add extra placeholder dimension to temp, height, humidity and slope maps
@@ -199,22 +199,22 @@ class Terrain:
         humidity = self.dimension_transform(humidity)
         slope_x = self.dimension_transform(self.slopes_x)
         slope_y = self.dimension_transform(self.slopes_y)
-        #rivers = self.dimension_transform(self.rivers)
+
         terrain_map = np.where(heights > 100,OCEAN,DRY_GRASS)
         #Determine tundra zone
-        terrain_map = np.where((heights > self.beach_zone) & (heights < 0.6) & (temps < 0.2),TUNDRA,terrain_map)
+        terrain_map = np.where((heights > self.beach_zone) & (heights < 0.6) & (temps < 0.25),TUNDRA,terrain_map)
         #Determine grassland zone
-        terrain_map = np.where((heights > self.beach_zone) & (heights < 0.6) & (temps > 0.2) & (humidity > 0.15),DRY_GRASS,terrain_map)
+        terrain_map = np.where((heights > self.beach_zone) & (heights < 0.6) & (temps > 0.25) & (humidity > 0.25),DRY_GRASS,terrain_map)
         #Determine temperate forrest zone
-        terrain_map = np.where((heights > self.beach_zone) & (heights < 0.6) & (temps > 0.2) & (humidity > 0.2),FORREST,terrain_map)
+        terrain_map = np.where((heights > self.beach_zone) & (heights < 0.6) & (temps > 0.25) & (humidity > 0.25),FORREST,terrain_map)
         #Determine marshland zone
-        terrain_map = np.where((heights > self.beach_zone) & (heights < 0.6) & (temps > 0.2) & (humidity > 0.3),MARSHLAND,terrain_map)
+        terrain_map = np.where((heights > self.beach_zone) & (heights < 0.6) & (temps > 0.25) & (humidity > 0.35),MARSHLAND,terrain_map)
         #Determine desert zone
-        terrain_map = np.where((heights > self.beach_zone) & (heights < 0.6) & (temps > 0.25) & (humidity < 0.2),SAND,terrain_map)
+        terrain_map = np.where((heights > self.beach_zone) & (heights < 0.6) & (temps > 0.3) & (humidity < 0.2),SAND,terrain_map)
         #Determine savannah zone
-        terrain_map = np.where((heights > self.beach_zone) & (heights < 0.6) & (temps > 0.35) & (humidity >= 0.2),SAVANNAH,terrain_map)
+        terrain_map = np.where((heights > self.beach_zone) & (heights < 0.6) & (temps > 0.3) & (humidity >= 0.25),SAVANNAH,terrain_map)
         #Determine rainforrest zone
-        terrain_map = np.where((heights > self.beach_zone) & (heights < 0.6) & (temps > 0.35) & (humidity > 0.3),TROPICAL,terrain_map)
+        terrain_map = np.where((heights > self.beach_zone) & (heights < 0.6) & (temps > 0.3) & (humidity > 0.35),TROPICAL,terrain_map)
         #Determine mountain zone by elevation
         terrain_map = np.where((heights > 0.6),MOUNTAIN,terrain_map)
         #Determine high mountain zone
@@ -225,8 +225,7 @@ class Terrain:
         terrain_map = np.where((heights > self.deep_water_lev) & (heights < self.water_lev),OCEAN,terrain_map)
         #Determine deep ocean  zone
         terrain_map = np.where((heights < self.deep_water_lev),DEEP_OCEAN,terrain_map)
-        #Plot rivers
-        #terrain_map = np.where(rivers == 1, OCEAN, terrain_map)
+
         print(terrain_map.shape)
         return terrain_map
 
@@ -298,17 +297,19 @@ class Climate:
         """
         Create a setup for the much faster humidity simulation that utilizes Numba
         """
-        g = 9.8     #Gravitational acceleration
-        h = 5.0      #Temperature gradient parameter
-        c = 0.15    #Coriolis effect paramter
-        v = 5.0
-        alpha = 0.2    #Temperature diffusivity parameter
+        g = 0.98     #Gravitational acceleration
+        h = 1.0     #Temperature gradient parameter
+        c = 0.1    #Coriolis effect paramter
+        v = 0.1
+        alpha = 0.1    #Temperature diffusivity parameter
 
+        #Generate an unsymmetric latitude map that goes from 0 at one pole to 1 at another
+        lat_map = noisegen.LatMap(self.height, self.length).gen_lat_map(symmetric = 'False')
 
         r1 = (self.dt * self.h_l_ratio)
         r2 = self.dt
-        r3 = (self.dt * v * (self.h_l_ratio))
-        r4 = (self.dt * v * (self.h_l_ratio))
+        r3 = (self.dt * v * (self.h_l_ratio * (self.h_l_ratio)))
+        r4 = (self.dt * v * (self.h_l_ratio * (self.h_l_ratio)))
 
         params = [g,h,c,r1,r2,r3,r4,alpha]
 
@@ -317,7 +318,9 @@ class Climate:
         nt = self.nt
         dt = self.dt
 
-        wind = climate_solver.windheat_sim(nx, ny, nt, dt,self.slopes, self.surf_slopes, self.lat_map_inv,self.init_temp, self.h_map, params, self.land_map)
+        print(np.mean(self.lat_map_inv))
+
+        wind = climate_solver.windheat_sim(nx, ny, nt, dt,self.slopes, self.surf_slopes, self.lat_map_inv,self.init_temp, self.h_map, params, self.land_map, lat_map)
 
         #Normalize temperature maps
         for n in range(1,len(wind[2]) - 1):
@@ -332,11 +335,11 @@ class Climate:
         """
         Create a setup for the much faster humidity simulation that utilizes Numba
         """
-        k = 0.1 #Diffusion parameter
-        p = 0.2
-        d = 0.15   #Elevation parameter
-        e = 0.25   #Evaporation parameter
-        T = 0.6
+        k = 0.05 #Diffusion parameter
+        p = 0.05
+        d = 0.20   #Elevation parameter
+        e = 0.20   #Evaporation parameter
+        T = 0.2
         nx = self.nx
         ny = self.ny
         nt = self.nt
@@ -366,7 +369,7 @@ class Climate:
         """
         #temp_map = np.where(self.h_map < self.water_level, self.water_level + 0.1, self.h_map)        #Transform ocean to uniform height
 
-        temp_map = (self.surf_h_map - 1.0) * (-1.0)
+        temp_map = (self.h_map - 1.0) * (-1.0)
 
         latmap = noisegen.LatMap(self.height, self.length)
         latitude_base = latmap.gen_lat_map()
@@ -375,7 +378,7 @@ class Climate:
         latitude_north = latmap.gen_lat_map(symmetric = False)
         
         latitude_ns = np.sin(latitude_north * t/11 + latitude_south * (12 - t)/11)
-        latitude = latitude_ns * 0.2 + latitude_base
+        latitude = latitude_ns * 0.05 + latitude_base
         latitude = self.normalize_map(latitude)
         temp_map = (temp_map * latitude)
         
@@ -390,11 +393,13 @@ class Climate:
         Evaporation depends on whether the point is below the water level (is ocean/water) and temperature
         """
 
-        temp_map = self.avg_temp
+        temp_map = self.temps[0]
+        ocean_evap = 1.1      #Strength of evaporation over ocean relative to land
+        freezing_evap = 0.5
 
         evap_map = np.zeros((self.height, self.length))
-        evap_map = np.where(self.h_map <= self.water_level, 1.0 * temp_map, 0.95 * temp_map)        #Evaporation is strongest over the ocean
-        evap_map = np.where(temp_map <= self.freeze_point, 0.15, evap_map)      #Evaporation is lower if below freezing
+        evap_map = np.where(self.h_map <= self.water_level, ocean_evap * temp_map, temp_map)        #Evaporation is strongest over the ocean
+        evap_map = np.where(temp_map <= self.freeze_point, freezing_evap * evap_map, evap_map)      #Evaporation is lower if below freezing
         evap_map = self.normalize_map(evap_map)
         return evap_map
 
