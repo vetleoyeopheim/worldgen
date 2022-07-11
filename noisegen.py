@@ -118,7 +118,6 @@ class LatMap():
         Generates a latitude map with values that are smallest towards the pole and smallest close to the equator
         Range of values are 0-1
         Generates a latitude map that is symmetric about the equator by default.
-        Non-symmetric latitude map has not been implemented yet
         If not, distance will be relative to the other pole. That is useful for temperature calculations due to inverse season between south and north
         
         """
@@ -134,7 +133,7 @@ class LatMap():
         if invert:
             lat_map = self.invert_map(lat_map)
 
-        lat_map = (lat_map - lat_map.min())/(lat_map.max() - lat_map.min())     
+        lat_map = (lat_map - lat_map.min())/(lat_map.max() - lat_map.min())     #Normalize map to the 0-1 range
         return lat_map
 
     def invert_map(self, amap):
