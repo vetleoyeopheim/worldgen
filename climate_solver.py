@@ -6,23 +6,18 @@ import numba
 Module with numba enhanced functions for faster climate simulations
 """
 
+
 @njit
 def windheat_sim(nx, ny, nt, dt, slopes, surf_slopes, latitude, temp_map, height_map,  params, land_map, lat_map):
    
     """
     Simulates heat and wind as a coupled system. Still work in progress!
     Calculate a wind flow map based on a 2D Burgers equation
-
     Calculations are based on the height map. A negative slope accelerates wind speed due to gravity (g). Opposite is true for upward facing slopes
-
     Wind speed and direction also depends on temperature gradient.
-
     A positive temperature gradient (cold air goes to warm air) increases wind speeds
-
     A latitude term is added to the x-direction of the wind simulation to mimic a coriolis type effect
-
     Temperature also changes with the time of the year using a sine function
-
     Equations for wind are:
         dv_dt = -dv_dx * v - dv_dy * u  + v * (d2v/dx2 + d2v/dy) - g * s_x(x,y) + h * tg_x(x,y) + c * latitude(x,y)
         du_dt = -du_dx * v - du_dy * u  + v * (d2v/dx2 + d2v/dy) - g * s_y(x,y) + h * tg_y(x,y)
@@ -118,6 +113,16 @@ def windheat_sim(nx, ny, nt, dt, slopes, surf_slopes, latitude, temp_map, height
 
     return sol_x, sol_y, temp
 
+
+@njit
+def calc_evap_map(temp_map, h_map, freeze_pnt, water_lev, nx, ny):
+    evap_map = np.zeros((ny, nx))
+    evap_map = np.where(h_map <= water_lev, 1.5 * temp_map, temp_map)        #Evaporation is strongest over the ocean
+    evap_map = np.where(temp_map <= freeze_pnt, 0.5 * evap_map, evap_map)      #Evaporation is lower if below freezing
+    evap_map = (evap_map - evap_map.min()) / (evap_map.max() - evap_map.min())  #Normalize
+
+    return evap_map
+
 @njit
 def humidity_sim(wind_x, wind_y, nx, ny, nt, dt, init_evap,h_map, temps, slopes, params):
     """
@@ -177,6 +182,7 @@ def humidity_sim(wind_x, wind_y, nx, ny, nt, dt, init_evap,h_map, temps, slopes,
         print(t)
 
     return humidity, precipitation
+
 
 @njit
 def wind_sim(nx, ny, nt, dt, slopes,  temp_grads, latitude, params):
@@ -250,7 +256,7 @@ def wind_sim(nx, ny, nt, dt, slopes,  temp_grads, latitude, params):
             u_arr[i] = u_row
         sol_x[t] = v_arr
         sol_y[t] = u_arr
-        print(t)
+
     sol[0] = sol_x
     sol[1] = sol_y
 
@@ -295,7 +301,7 @@ def temp_sim(nx, ny, periods, dt, init_temps, params):
                     T = sol[t - 1][i][j]\
                         + r1 * alpha * (sol[t - 1][i + 1][j] + sol[t - 1][i - 1][j] - 2 * sol[t - 1][i][j])\
                         + r2 * alpha * (sol[t - 1][i][j + 1] + sol[t - 1][i][j - 1] - 2 * sol[t - 1][i][j])
-                print(T)
+
                 x_col[j] = T
             y_arr[i] = x_col
         sol[t] = y_arr
