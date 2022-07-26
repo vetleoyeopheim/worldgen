@@ -3,6 +3,8 @@ import numpy as np
 import noise
 import math
 from scipy.ndimage import sobel
+from scipy.ndimage import gaussian_filter as gaussf
+from numba import njit
 
 class NoiseMap:
     """
@@ -11,7 +13,7 @@ class NoiseMap:
         wrapping: either cylinder or plane. Cylinder makes the noise wrap around itself, but is TODO for now
         
     """
-    def __init__(self, height, length, exp_factor = 1, wrapping = 'plane'):
+    def __init__(self, height, length, exp_factor = 1.3, wrapping = 'plane'):
         self.height = height
         self.length = length
         self.wrapping = wrapping
@@ -27,14 +29,40 @@ class NoiseMap:
                 persistence = pers, lacunarity=lac, repeatx = self.height / 2, repeaty = self.length, base= seed)
                 h_map[i][j] = z
         
-        #h_map = self.sobel_filter(h_map)
-        #h_map = self.arctan_transform(h_map)
         h_map = self.exp_transform(h_map)
-        
-        
+        h_map = h_map
         h_map = self.normalize_array(h_map)
+        
         return h_map
-   
+ 
+    def gen_smoothnoise_map(self, sigma):
+        """
+        Generate a noisemap from random noise that is then smoothed with gaussian blur
+        """
+
+        #Generate a noisemap with random noise ranging from 0 to 1
+        n_map = np.random.random(size = (self.height, self.length))
+        #Filter with gaussian blur
+        n_map = gaussf(n_map, sigma = sigma)
+        return n_map
+
+    def gen_twostate_noisemap(self, sigma, prob):
+        """
+        Generate a noise map based on two states, ocean(0) and land(1)
+        The algorithm starts with a 2d array of 0
+        Then the state of each element is determined by the state of previous elements in the x and y direction, and given probabilities
+        Finally the map is put through a gaussian blur filter with a given sigma
+        prob is a list of 4 probabilities for the state being 0 for 4 different cases of neighbouring elements : [prob_x0_y0, prob_x1_y0, prob_x0_y1, prob_x1_y1]
+        
+        """
+        n_map = np.zeros((self.height, self.length))
+        
+        #Call a function using numba to cut down on computation time
+        n_map = twostate_loop(n_map, self.height, self.length, prob)
+
+        n_map = gaussf(n_map, sigma = sigma)
+        return n_map
+
     def cyl_transform(self, i,j):
         """
         Applies a cylindrical transform to the noise map so that it will wrap around itself
@@ -79,6 +107,10 @@ class NoiseMap:
         nmap = np.exp(self.exp_factor * nmap)
         return nmap
     
+    def sin_transform(self, nmap):
+        nmap = np.sin(nmap/math.pi)
+        return nmap
+
     def arctan_transform(self, nmap):
         nmap = np.arctan(15*nmap/math.pi)
         return nmap
@@ -139,3 +171,28 @@ class LatMap():
     def invert_map(self, amap):
         amap = (amap - 1.0) * (-1.0)          #This inverts the latitude map so that the equator equals 1 and the poles equals zero
         return amap
+
+
+@njit
+def twostate_loop(init_map, nx, ny, prob):
+
+    n_map = init_map
+
+    for i in range(1,nx,1):
+        for j in range(1,ny,1):
+            if n_map[i - 1][j] == 0 and n_map[i][j - 1] == 0:
+                prob_zero = prob[0]       #prob_zero is the probability that the element will be in state zero
+            elif n_map[i - 1][j] == 1 and n_map[i][j - 1] == 0:
+                prob_zero = prob[1]
+            elif n_map[i - 1][j] == 0 and n_map[i][j - 1] == 1:
+                prob_zero = prob[2]
+            elif n_map[i - 1][j] == 1 and n_map[i][j - 1] == 1:
+                prob_zero = prob[3]
+
+            rand_draw = np.random.random()
+            if prob_zero > rand_draw:
+                n_map[i][j] = 0
+            else:
+                n_map[i][j] = 1
+
+    return n_map
