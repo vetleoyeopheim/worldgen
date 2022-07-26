@@ -89,7 +89,7 @@ class Terrain:
             
         """
 
-        self.dt = 0.05
+        self.dt = 0.2
         self.seed = random.randint(0,10000)
         self.periods = periods
 
@@ -118,6 +118,8 @@ class Terrain:
         self.terrain_base = self.set_terrain_type()
         self.terrain_map = self.terrain_base
         self.terrain_set = self.generate_terrain()
+
+        print('test')
 
     def generate_terrain(self):
 
@@ -229,6 +231,8 @@ class Terrain:
         print(terrain_map.shape)
         return terrain_map
 
+    def set_biomes(self):
+        pass
 
 
     #slope(gradient) map of a map
