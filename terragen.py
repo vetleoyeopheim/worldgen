@@ -202,25 +202,35 @@ class Terrain:
         slope_x = self.dimension_transform(self.slopes_x)
         slope_y = self.dimension_transform(self.slopes_y)
 
+        mountain_perim = 0.6        #Height where mountain zone starts
+        hmountain_perim = 0.75      #Height where high mountain zone starts  
+        
+        tundra_temp_perim = 0.25    #Temperature below which terrain is tundra
+        tropics_temp_perim = 0.3    #Temperature above which is tropical zone (savannah and tropical)
+
+        desert_humid = 0.2      #Humidity value below which zone is desert
+        forrest_humid = 0.25    #Humidity for forrest or savannah
+        wetland_humid = 0.35   #Humidity above which we have wetlands (rainforest or marshland)
+
         terrain_map = np.where(heights > 100,OCEAN,DRY_GRASS)
         #Determine tundra zone
-        terrain_map = np.where((heights > self.beach_zone) & (heights < 0.6) & (temps < 0.25),TUNDRA,terrain_map)
+        terrain_map = np.where((heights > self.beach_zone) & (heights < mountain_perim) & (temps < tundra_temp_perim),TUNDRA,terrain_map)
         #Determine grassland zone
-        terrain_map = np.where((heights > self.beach_zone) & (heights < 0.6) & (temps > 0.25) & (humidity > 0.25),DRY_GRASS,terrain_map)
+        terrain_map = np.where((heights > self.beach_zone) & (heights < mountain_perim) & (temps > tundra_temp_perim) & (humidity > desert_humid),DRY_GRASS,terrain_map)
         #Determine temperate forrest zone
-        terrain_map = np.where((heights > self.beach_zone) & (heights < 0.6) & (temps > 0.25) & (humidity > 0.25),FORREST,terrain_map)
+        terrain_map = np.where((heights > self.beach_zone) & (heights < mountain_perim) & (temps > tundra_temp_perim) & (humidity > forrest_humid),FORREST,terrain_map)
         #Determine marshland zone
-        terrain_map = np.where((heights > self.beach_zone) & (heights < 0.6) & (temps > 0.25) & (humidity > 0.35),MARSHLAND,terrain_map)
-        #Determine desert zone
-        terrain_map = np.where((heights > self.beach_zone) & (heights < 0.6) & (temps > 0.3) & (humidity < 0.2),SAND,terrain_map)
+        terrain_map = np.where((heights > self.beach_zone) & (heights < mountain_perim) & (temps > tundra_temp_perim) & (humidity > wetland_humid),MARSHLAND,terrain_map)
         #Determine savannah zone
-        terrain_map = np.where((heights > self.beach_zone) & (heights < 0.6) & (temps > 0.3) & (humidity >= 0.25),SAVANNAH,terrain_map)
+        terrain_map = np.where((heights > self.beach_zone) & (heights < mountain_perim) & (temps > tropics_temp_perim) & (humidity >= forrest_humid),SAVANNAH,terrain_map)
         #Determine rainforrest zone
-        terrain_map = np.where((heights > self.beach_zone) & (heights < 0.6) & (temps > 0.3) & (humidity > 0.35),TROPICAL,terrain_map)
+        terrain_map = np.where((heights > self.beach_zone) & (heights < mountain_perim) & (temps > tropics_temp_perim) & (humidity > wetland_humid),TROPICAL,terrain_map)
+        #Determine desert zone
+        terrain_map = np.where((heights > self.beach_zone) & (heights < mountain_perim) & (humidity < 0.05),SAND,terrain_map)
         #Determine mountain zone by elevation
-        terrain_map = np.where((heights > 0.6),MOUNTAIN,terrain_map)
+        terrain_map = np.where((heights > mountain_perim),MOUNTAIN,terrain_map)
         #Determine high mountain zone
-        terrain_map = np.where((heights > 0.75),HIGH_MOUNTAIN,terrain_map)
+        terrain_map = np.where((heights > hmountain_perim),HIGH_MOUNTAIN,terrain_map)
         #Determine beach  zone
         terrain_map = np.where((heights >= self.water_lev) & (heights <= self.beach_zone) & (abs(slope_x) < 0.02) & (abs(slope_y) < 0.02),SAND,terrain_map)
         #Determine ocean  zone
