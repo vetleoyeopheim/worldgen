@@ -9,31 +9,57 @@ from numba import njit
 class NoiseMap:
     """
     Parameters:
-        algo: currently only perlin noise
-        wrapping: either cylinder or plane. Cylinder makes the noise wrap around itself, but is TODO for now
+
         
     """
-    def __init__(self, height, length, exp_factor = 1.3, wrapping = 'plane'):
+    def __init__(self, height, length, exp_factor = 1.5):
         self.height = height
         self.length = length
-        self.wrapping = wrapping
         self.exp_factor = exp_factor
 
     def gen_simplex_map(self,scale,octa, pers, lac, seed):
+        """
+        Generates a map with Simplex noise.
+        Uses the following module: https://github.com/caseman/noise
+
+        """
         h_map = np.zeros((self.height, self.length))
         
         for i in range(self.height):
             for j in range(self.length):
                 coords = (i,j)
                 z = noise.snoise2(coords[0]/scale, coords[1]/scale, octaves=octa, \
-                persistence = pers, lacunarity=lac, repeatx = self.height / 2, repeaty = self.length, base= seed)
+                persistence = pers, lacunarity=lac, repeatx = self.height, repeaty = self.length, base= seed)
                 h_map[i][j] = z
         
-        h_map = self.exp_transform(h_map)
-        h_map = h_map
         h_map = self.normalize_array(h_map)
         
         return h_map
+
+    def gen_voronoi_map(self, n_points):
+        """
+        Generate a Voronoi (Worley) noise map
+        n_points is the number of randomly distributed points on the map that the voronoi cells are defined by
+        """
+
+        loc_coords = []
+
+        for n in range(n_points):
+            x_loc = np.random.randint(0,self.height)
+            y_loc = np.random.randint(0,self.length)
+            pnt = np.array((x_loc,y_loc))
+            loc_coords.append(pnt)
+
+        x = self.height
+        y = self.length
+
+        voronoi_map = voronoi_distances(loc_coords, n_points, x, y)
+
+        #Normalize map
+        voronoi_map = self.normalize_array(voronoi_map)
+
+        return voronoi_map
+
  
     def gen_smoothnoise_map(self, sigma):
         """
@@ -63,18 +89,7 @@ class NoiseMap:
         n_map = gaussf(n_map, sigma = sigma)
         return n_map
 
-    def cyl_transform(self, i,j):
-        """
-        Applies a cylindrical transform to the noise map so that it will wrap around itself
-        Not at all finished
-        """
-        tau = 2 * math.pi
-        angle_x = tau * i
-        return (math.cos(angle_x)/tau,math.sin(angle_x)/tau,j) 
 
-
-        #Transforms the height_map to a height_map shaped like a circle, with higher values closer to the center
-        #TODO: This needs to be fixed
     def circular_gradient_transform(self, h_map, height, length):
         center_j = self.height / 2
         center_i = self.length / 2
@@ -196,3 +211,20 @@ def twostate_loop(init_map, nx, ny, prob):
                 n_map[i][j] = 1
 
     return n_map
+
+@njit
+def voronoi_distances(loc_coords, n_points, x, y):
+
+    point_distances = np.zeros((n_points))
+    dist_arr = np.zeros((x,y))
+    for i in range(len(dist_arr)):
+        for j in range(len(dist_arr[0])):
+            for k in range(len(loc_coords)):
+                point = loc_coords[k]
+                dist = np.sqrt((point[0] - i)**2 + (point[1] - j)**2)
+                point_distances[k] = dist
+
+            min_dist_ind = np.argmin(point_distances)
+            dist_arr[i][j] = point_distances[min_dist_ind]
+
+    return dist_arr
