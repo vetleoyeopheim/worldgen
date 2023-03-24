@@ -1,431 +1,398 @@
 
-import noise
+import numpy as np
+import noisegen as ng
 import random
 import math
-import numpy as np
-import noisegen
-from scipy.interpolate import interp2d
-from scipy.interpolate import RectBivariateSpline
-from numpy import inf
 import climate_solver
-from numba import njit
-from PIL import Image
-import cv2
+import open3d
+import colors
+from scipy.ndimage import gaussian_filter
 from PIL import Image
 from matplotlib import pyplot as plt
 
-BLANK = [0,0,0]
-DEEP_OCEAN = [30,75,235]
-OCEAN = [65,105,225]
-FORREST = [95,156,23]
-TROPICAL = [29,120,88]
-SAVANNAH = [204,217,65]
-SAND = [238, 214, 175]
-SNOW = [245, 245, 240]
-ICE = [220,220,250]
-MOUNTAIN = [139, 137, 137]
-HIGH_MOUNTAIN = [99,95,95]
-TUNDRA = [152,121,101]
-BORREAL_FORREST = [33,82,16]
-DRY_GRASS = [123,148,40]
-MARSHLAND = [74,161,146]
+COLORS = colors.COLORS
 
-COLORS = [DEEP_OCEAN,OCEAN, FORREST, TROPICAL, SAVANNAH,\
-          SAND, SNOW, ICE, MOUNTAIN, TUNDRA, DRY_GRASS, MARSHLAND,\
-          BORREAL_FORREST]
-
-
-class World:
-
-    """
-    Class for the procedurally generated world
-
-    """
-
-    def __init__(self, height, length, periods):
-        """
-            Parameters
-        ----------
-        map_height : 
-            Number of pixels of the map in the y direction
-        map_length : 
-            Number of pixels of the map in the y direction
-        """
-        self.height = height
-        self.length = length
-        self.periods = periods
-
-        self.terrain = Terrain(self.height, self.length, self.periods)
 
 class Terrain:
 
-    """
-    Terrain class for a procedurally generated world
-    Climate class is instantiated for the terrain to simulate temperature, wind flow and humidity
-    Together with the height map, the climate determines the biomes on the map
-    """   
-    def __init__(self, height, length, periods, octaves=6, persistence=0.61, \
-                 lacunarity=2.3, water_lev=0.35, freeze_pnt=0.15):
+    def __init__(self, size, water_level, periods = 365):
         """
+        Parameters:
+            -size: list of two integers. First component is the size of the y-axis(longitude) and the second component is the y-axis(latitude)
 
-        Parameters
-        ----------
-        map_height : 
-            Number of pixels of the map in the y direction
-        map_length : 
-            Number of pixels of the map in the y direction
-        scale :  optional
-            parameter for noise generation. The default is 128.
-        octaves :  optional
-            parameter for noise generation. The default is 6.
-        persistence :  optional
-            parameter for noise generation. The default is 0.6.
-        lacunarity :  optional
-            parameter for noise generation. The default is 2.0.
-        water_level :  optional
-            determine the height of the oceans, lakes etc., must be between 0 and 1. The default is 0.4.
-        freeze_pnt :  optional
-            Determine how cold the world should be. Value between 0 and 1. The default is 0.35.
-            
         """
-
-        self.dt = 0.2
-        self.seed = random.randint(0,10000)
+        self.size_x = size[0]
+        self.size_y = size[1]
         self.periods = periods
+        self.water_level = water_level
+        self.beach_zone = self.water_level + 0.03
+        self.freeze_pnt = 0.25
 
-        self.height = height
-        self.length = length
+        #Generate height map and slopes for the height map in the x and y direction
+        self.create_height_map()
+        self.slopes = self.create_slope_map(self.height_map)
+        self.slope_x = self.slopes[0]
+        self.slope_y = self.slopes[1]
 
-        #Parameters for height map
-        self.scale = self.length / 4
-        self.octaves = octaves
-        self.persistence = persistence
-        self.lacunarity = lacunarity
-        self.gen_noise_maps
+        self.climate = Climate(size, self.height_map, 0.5,self.water_level,periods,self.slopes)
 
-        #Terrain parameters
-        self.water_lev = water_lev = water_lev
-        self.deep_water_lev = self.water_lev - 0.15
-        self.beach_zone = self.water_lev + 0.03
-        self.freeze_pnt = freeze_pnt
+        self.base_temp = self.climate.init_temp
+        self.base_humidity = self.climate.init_humidity
 
-        #Make terrain noise maps
-        self.gen_noise_maps()
+        self.biome_map = self.set_biomes_standard()
 
-        self.climate = Climate(self.h_map, self.surf_h_map, (self.height, self.length), self.lat_map, self.lat_map_inv, self.dt, \
-                                self.periods,self.land_map, water_level = self.water_lev)
+        self.terrain_maps = self.apply_temperatures()
 
-        self.terrain_base = self.set_terrain_type()
-        self.terrain_map = self.terrain_base
-        self.terrain_set = self.generate_terrain()
 
-        print('test')
+    def create_height_map(self):
+        scale = self.size_x / 4.0
+        octaves = 6
+        lacunarity = 2.3
+        persistence = 0.61
+        voronoi_factor = 0.45
+        seed = random.randint(0,100000)
+        noisemap = ng.NoiseMap(self.size_x, self.size_y)
+        
+        voronoi_map = noisemap.gen_voronoi_map(128)
+        height_map = noisemap.gen_simplex_map(scale, octaves, persistence, lacunarity, seed)
 
-    def generate_terrain(self):
+        self.height_map = voronoi_factor * voronoi_map + height_map
+        self.height_map = ((self.height_map - self.height_map.min()) / (self.height_map.max() - self.height_map.min()))
+        
+        self.sea_level_height_map = np.where(self.height_map <= self.water_level, self.water_level, self.height_map)
+        #self.height_map = np.where(self.height_map <= self.water_level, self.water_level - 0.01, self.height_map)
+        
+    
+    def apply_temperatures(self):
+        """
+        Generate a set of images where temperature has been applied for a full cycle (year)
+        """
 
-        terrain_set = []
+        terrain_maps = []
+        
+        heights = self.dimension_transform(self.height_map)
 
         for t in range(self.periods):
-            nt = int(t / self.dt)
-            temp_map = self.climate.temps[nt]
-            self.terrain_map = self.apply_temp(temp_map, self.terrain_base)
-            terrain_set.append(self.terrain_map)
+            #temps = self.dimension_transform(temps[t])
+            temp = self.climate.temp_maps[t]
+            temp = self.dimension_transform(temp)
+            terrain_map = self.biome_map
 
-        return terrain_set
-            
+            terrain_map = np.where((temp < self.freeze_pnt) & (heights > self.water_level),SNOW,terrain_map)
+            terrain_map = np.where((temp < self.freeze_pnt) & (heights <= self.water_level),ICE,terrain_map)
+            terrain_maps.append(terrain_map)
 
-    def gen_noise_maps(self):
-        """
-        Add a height map
-        Add a surface height map which is the height map but with all values equal to water level below or equal to it
-        Add a latitude map where the value equals 1 at the equator and 0 at the poles
-        Add a inverted latitude map where the value equals 0 at the equator and 1 at the poles
-        """
-        #Generate height maps
-        noise_map = noisegen.NoiseMap(self.height, self.length, exp_factor = 1.5)
-        self.h_map = noise_map.gen_simplex_map(self.scale, self.octaves, self.persistence, self.lacunarity, self.seed)
-        self.surf_h_map = self.surface_map(self.water_lev, self.h_map)
+        return terrain_maps
+
+    def create_slope_map(self, amap):
+        slope_map = np.gradient(amap)
         
-        #Generate latitude maps
-        latmap = noisegen.LatMap(self.height, self.length)
-        self.lat_map = latmap.gen_lat_map(invert = False)
-        self.lat_map_inv = latmap.gen_lat_map(invert = True)
+        return slope_map
 
-        #Generate slope maps
-        self.slopes = np.gradient(self.h_map)
-        self.slopes_x = self.slopes[0]
-        self.slopes_y = self.slopes[1]
-
-        #Generate land sea map
-        l_map = noisegen.LandMap(self.height, self.length, self.h_map, self.water_lev)
-        self.land_map = l_map.gen_land_map()
-
-
-    def surface_map(self, level, amap):
+    def set_biomes_standard(self):
         """
-        The surface map is a map but with values under or equal to the level value equal to the level
+        Determine biome of the different parts of the world by using elevation, temperature and humidity
         """
-        surf_map = np.where(self.h_map <= level, level, amap)
-        return surf_map
+
+        #temps = self.climate.temps[1]
+        #humidity = self.climate.humidity[1]
+        biome_map = np.zeros((self.size_x, self.size_y)+(1,))
+        
+        #Add extra placeholder dimension to temp, height, humidity and slope maps
+        temps = self.dimension_transform(self.base_temp)
+        heights = self.dimension_transform(self.height_map)
+        humidity = self.dimension_transform(self.base_humidity)
+        slope_x = self.dimension_transform(self.slope_x)
+        slope_y = self.dimension_transform(self.slope_y)
+
+        mountain_perim = 0.7        #Height where mountain zone starts
+        hmountain_perim = 0.8      #Height where high mountain zone starts  
+        
+        tundra_temp_perim = 0.25    #Temperature below which terrain is tundra
+        tropics_temp_perim = 0.4    #Temperature above which is tropical zone (savannah and tropical)
+
+        desert_humid = 0.2      #Humidity value below which zone is desert
+        forrest_humid = 0.3    #Humidity for forrest or savannah
+        wetland_humid = 0.4   #Humidity above which we have wetlands (rainforest or marshland)
+        tundra_humid_perim = 0.10
+
+        deep_water_lev = 0.8 * self.water_level 
+
+        biome_map = np.where(heights > 100,OCEAN,DRY_GRASS)
+
+        biome_map = np.where((heights <= self.water_level),OCEAN, biome_map)
+        #Determine beach  zone
+        biome_map = np.where((heights >= self.water_level) & (heights <= self.beach_zone),SAND,biome_map)
+
+        #Set arctic zones
+
+        #Set cold zones, tundra for dry and cold and taiga for more humid and cold areas
+        biome_map = np.where((heights > self.beach_zone) & (temps < tundra_temp_perim) & (humidity < tundra_humid_perim),TUNDRA,biome_map)
+        biome_map = np.where((heights > self.beach_zone) & (temps < tundra_temp_perim) & (humidity >= tundra_humid_perim),BORREAL_FORREST,biome_map)
+
+        #Set temperate zones: desert, forrest, grasslands and marshlands
+        biome_map = np.where((heights > self.beach_zone) & (temps > tundra_temp_perim) & (humidity < desert_humid),SAND,biome_map)
+        biome_map = np.where((heights > self.beach_zone) & (temps > tundra_temp_perim) & (humidity > desert_humid),DRY_GRASS,biome_map)
+        biome_map = np.where((heights > self.beach_zone) & (temps > tundra_temp_perim) & (humidity > forrest_humid),FORREST,biome_map)
+        biome_map = np.where((heights > self.beach_zone) & (temps > tundra_temp_perim) & (humidity > wetland_humid),MARSHLAND,biome_map)
+
+        #Set tropics zones
+        biome_map = np.where((heights > self.beach_zone) & (temps > tropics_temp_perim) & (humidity < desert_humid),SAND,biome_map)
+        biome_map = np.where((heights > self.beach_zone) & (temps > tropics_temp_perim) & (humidity > forrest_humid),SAVANNAH,biome_map)
+        biome_map = np.where((heights > self.beach_zone) & (temps > tropics_temp_perim) & (humidity > wetland_humid),TROPICAL,biome_map)
+
+        #Determine mountain zone by elevation
+        biome_map = np.where((heights > mountain_perim),MOUNTAIN,biome_map)
+        #Determine high mountain zone
+        biome_map = np.where((heights > hmountain_perim),HIGH_MOUNTAIN,biome_map)
+        #Determine deep ocean  zone
+        biome_map = np.where((heights < deep_water_lev),DEEP_OCEAN,biome_map)
+        
+        return biome_map
+
 
     #Turn a 2d array of floats into a 3d array to be compatible for masking
     def dimension_transform(self, amap):
         amap = np.reshape(amap, amap.shape +(1,))
         return amap
 
-    #Apply temp map to terrain map to determine which areas are frozen (ice or snow)
-    def apply_temp(self, temps, terrain_map):
 
-        heights = self.h_map
-        heights = self.dimension_transform(heights)
-        temps = self.dimension_transform(temps)
-        terrain_map = np.where((temps < self.freeze_pnt) & (heights > self.water_lev),SNOW,terrain_map)
-        terrain_map = np.where((temps < self.freeze_pnt) & (heights <= self.water_lev),ICE,terrain_map)
-        return terrain_map
 
-    def set_terrain_type(self):
-        """
-        Assign terrain types (biomes) to the map based on the parameters:
-            -temperature
-            -elevation
-            -humidity
-        """
         
-        temps = self.climate.temps[1]
-        humidity = self.climate.humidity[1]
-        terrain_map = np.zeros((self.height, self.length)+(1,))
-        
-        #Add extra placeholder dimension to temp, height, humidity and slope maps
-        temps = self.dimension_transform(temps)
-        heights = self.dimension_transform(self.h_map)
-        humidity = self.dimension_transform(humidity)
-        slope_x = self.dimension_transform(self.slopes_x)
-        slope_y = self.dimension_transform(self.slopes_y)
-
-        mountain_perim = 0.6        #Height where mountain zone starts
-        hmountain_perim = 0.75      #Height where high mountain zone starts  
-        
-        tundra_temp_perim = 0.25    #Temperature below which terrain is tundra
-        tropics_temp_perim = 0.3    #Temperature above which is tropical zone (savannah and tropical)
-
-        desert_humid = 0.2      #Humidity value below which zone is desert
-        forrest_humid = 0.25    #Humidity for forrest or savannah
-        wetland_humid = 0.35   #Humidity above which we have wetlands (rainforest or marshland)
-
-        terrain_map = np.where(heights > 100,OCEAN,DRY_GRASS)
-        #Determine tundra zone
-        terrain_map = np.where((heights > self.beach_zone) & (heights < mountain_perim) & (temps < tundra_temp_perim),TUNDRA,terrain_map)
-        #Determine grassland zone
-        terrain_map = np.where((heights > self.beach_zone) & (heights < mountain_perim) & (temps > tundra_temp_perim) & (humidity > desert_humid),DRY_GRASS,terrain_map)
-        #Determine temperate forrest zone
-        terrain_map = np.where((heights > self.beach_zone) & (heights < mountain_perim) & (temps > tundra_temp_perim) & (humidity > forrest_humid),FORREST,terrain_map)
-        #Determine marshland zone
-        terrain_map = np.where((heights > self.beach_zone) & (heights < mountain_perim) & (temps > tundra_temp_perim) & (humidity > wetland_humid),MARSHLAND,terrain_map)
-        #Determine savannah zone
-        terrain_map = np.where((heights > self.beach_zone) & (heights < mountain_perim) & (temps > tropics_temp_perim) & (humidity >= forrest_humid),SAVANNAH,terrain_map)
-        #Determine rainforrest zone
-        terrain_map = np.where((heights > self.beach_zone) & (heights < mountain_perim) & (temps > tropics_temp_perim) & (humidity > wetland_humid),TROPICAL,terrain_map)
-        #Determine desert zone
-        terrain_map = np.where((heights > self.beach_zone) & (heights < mountain_perim) & (humidity < 0.05),SAND,terrain_map)
-        #Determine mountain zone by elevation
-        terrain_map = np.where((heights > mountain_perim),MOUNTAIN,terrain_map)
-        #Determine high mountain zone
-        terrain_map = np.where((heights > hmountain_perim),HIGH_MOUNTAIN,terrain_map)
-        #Determine beach  zone
-        terrain_map = np.where((heights >= self.water_lev) & (heights <= self.beach_zone) & (abs(slope_x) < 0.02) & (abs(slope_y) < 0.02),SAND,terrain_map)
-        #Determine ocean  zone
-        terrain_map = np.where((heights > self.deep_water_lev) & (heights < self.water_lev),OCEAN,terrain_map)
-        #Determine deep ocean  zone
-        terrain_map = np.where((heights < self.deep_water_lev),DEEP_OCEAN,terrain_map)
-
-        print(terrain_map.shape)
-        return terrain_map
-
-    def set_biomes(self):
-        pass
-
-
-    #slope(gradient) map of a map
-    def get_slope_map(self, amap):
-        slope_map = np.gradient(amap)
-        
-        return slope_map
-
-    def map_interp(self, amap, iterations):
-        interp_map = amap
-        for iter in range(iterations):
-            i = np.arange(0,self.height)
-            j = np.arange(0,self.length)
-            #interp = interp2d(i,j,amap)
-            #interp_map = interp(i,j)
-            interp = RectBivariateSpline(i,j,amap)
-            interp_map = interp(i,j)
-        
-        return interp_map
 
 class Climate:
 
-    def __init__(self, h_map,surf_h_map, res, lat_map, lat_map_inv, dt, periods,land_map, freeze_point = 0.13, water_level = 0.3):
-        """
-        The climate simulation can take a different set of heights and lengths to the original map to speed up computations
-        The height map provided can be scaled down to fit resolution for the climate simulation
-        Calculates wind flow (wind speeds and directions), temperature and humidity for the world
-        """
-
-        self.periods = periods
-        self.dt = dt
-        self.nx = res[1]
-        self.ny = res[0]
-        self.nt = int(periods / self.dt)
-        self.res = res
-        self.height = res[0]
-        self.length = res[1]
-        self.h_l_ratio = self.height / self.length
-        self.water_level = water_level
+    def __init__(self, size, height_map, freeze_point, water_level, sim_length, slopes, deltas = [8,8]):
+        
+        self.size_x = size[0]
+        self.size_y = size[1]
+        self.deltas = deltas
+        self.height_map = height_map
+        self.slopes = slopes
         self.freeze_point = freeze_point
-        self.h_map = h_map
-        self.surf_h_map = surf_h_map
-        self.lat_map = lat_map
-        self.lat_map_inv = lat_map_inv
-        self.land_map = land_map
-        self.slopes = np.gradient(self.h_map)
-        self.surf_slopes = np.gradient(self.surf_h_map)
+        self.water_level = water_level
+        self.sim_length = sim_length            #Simulation length is in days
 
-        self.init_temp = self.gen_temp_map(0)
+        self.create_latmap()
+        
+        self.init_temp = self.gen_init_temp()
+        self.temp_maps = self.gen_temp_cycle()
+        self.init_humidity = self.gen_init_humidity()
+
+        self.downscale_simulation()
+
+        self.wind_map = self.wind_sim()
+
+    def downscale_simulation(self):
+        """
+        Scales down x and y grid of the simulation by dx and dy factors
+        Used on initial temperatures and humidity
+        """
+        
+        scaled_x = int(self.size_x / self.deltas[0])
+        scaled_y = int(self.size_y / self.deltas[1])
+        """
+        img_temp = Image.fromarray(self.init_temp).convert('RGB')
+        img_humid = Image.fromarray(self.init_humidity)
+        img_heights = Image.fromarray(self.init_temp)
+
+        img_temp = img_temp.resize((scaled_x, scaled_y))
+        img_humid = img_temp.resize((scaled_x, scaled_y))
+        img_heights = img_temp.resize((scaled_x, scaled_y))
+
+        img_temp.save('scaled_temp.png')
+        """
+        self.temp_scaled = self.init_temp[::self.deltas[1], ::self.deltas[0]]
+        self.humid_scaled = self.init_humidity[::self.deltas[1], ::self.deltas[0]]
+        self.heights_scaled = self.height_map[::self.deltas[1], ::self.deltas[0]]
+        self.lat_map_scaled = self.lat_map[::self.deltas[1], ::self.deltas[0]]
+        self.lat_map_inv_scaled = self.lat_map_inv[::self.deltas[1], ::self.deltas[0]]
+
+        print(self.temp_scaled.shape)
+
+        plt.imsave('temp_scaled.png',self.temp_scaled, cmap = 'hot')
+
+    def upscale_simulation(self):
+
+        pass
+
         
 
-        self.windheat = self.wind_heat_sim()
-        self.wind_x = self.windheat[0]
-        self.wind_y = self.windheat[1]
-        self.temps = self.windheat[2]
-
-        #Calculate average humidity and temperatures
-        self.avg_temp = self.avg_map(self.temps)
-        self.init_evap = self.gen_evap_map()
-        self.humid_evap = self.humid_sim()
-        self.humidity = self.humid_evap[0]
-        self.evap = self.humid_evap[1]
-        self.avg_humidity = self.avg_map(self.humidity)#self.avg_map(self.humidity)
+    def wind_sim(self, scale_factor = 4, dt = 1.0, dx = 1.0, dy = 1.0):
+        """
+        Create a setup for wind simulation using Numba
+        """
+        nx = int(self.size_x / self.deltas[0])
+        ny = int(self.size_y / self.deltas[1])
+        lat_map_inv = self.lat_map_inv_scaled
+        lat_map = self.lat_map_scaled
+        height_map = self.heights_scaled
+        temp = self.temp_scaled
+        temp_gradient = np.gradient(temp)
         
-    def wind_heat_sim(self):
-        """
-        Create a setup for the much faster humidity simulation that utilizes Numba
-        """
-        g = 0.98     #Gravitational acceleration
-        h = 1.0     #Temperature gradient parameter
-        c = 0.1    #Coriolis effect paramter
-        v = 0.1
-        alpha = 0.1    #Temperature diffusivity parameter
 
-        #Generate an unsymmetric latitude map that goes from 0 at one pole to 1 at another
-        lat_map = noisegen.LatMap(self.height, self.length).gen_lat_map(symmetric = 'False')
-
-        r1 = (self.dt * self.h_l_ratio)
-        r2 = self.dt
-        r3 = (self.dt * v * (self.h_l_ratio * (self.h_l_ratio)))
-        r4 = (self.dt * v * (self.h_l_ratio * (self.h_l_ratio)))
-
-        params = [g,h,c,r1,r2,r3,r4,alpha]
-
-        nx = self.nx
-        ny = self.ny
-        nt = self.nt
-        dt = self.dt
-
-        print(np.mean(self.lat_map_inv))
-
-        wind = climate_solver.windheat_sim(nx, ny, nt, dt,self.slopes, self.surf_slopes, self.lat_map_inv,self.init_temp, self.h_map, params, self.land_map, lat_map)
-
-        #Normalize temperature maps
-        for n in range(1,len(wind[2]) - 1):
-            wind[2][n] = self.normalize_map(wind[2][n])
-
+        
+        #Create a surface map with ocean level being flat
+        cm = ClimateMap(nx, ny, height_map)
+        surface_map = cm.surface_map(self.water_level)
+        slopes = np.gradient(surface_map)
+        land_map = cm.land_map(self.water_level)
+    
+        #wind = climate_solver.wind_heat_ns(nx, ny, dt, lat_map_inv, surface_map, temp, temp_gradient, slopes, lat_map, land_map)
+        wind = climate_solver.wind_sim(nx, ny, dt, lat_map_inv, surface_map, temp_gradient, slopes)
         return wind
 
+    def create_latmap(self):
+
+        lmap = ng.LatMap(self.size_x, self.size_y)
+
+        self.lat_map = lmap.gen_lat_map()        #Generate an inverted latitude map
+        self.lat_map_inv = lmap.gen_lat_map(invert = False)
 
 
 
-    def humid_sim(self):
+    def gen_init_temp(self):
         """
-        Create a setup for the much faster humidity simulation that utilizes Numba
+        Generate an initial temperature map based on latitude and a height map
+        The initial temperature is around the autumnal equinox so that temperature is 
         """
-        k = 0.05 #Diffusion parameter
-        p = 0.05
-        d = 0.20   #Elevation parameter
-        e = 0.20   #Evaporation parameter
-        T = 0.2
-        nx = self.nx
-        ny = self.ny
-        nt = self.nt
-        dt = self.dt
+        cm = ClimateMap(self.size_x, self.size_y, self.height_map)
+        temp_map = cm.gen_temp_map(self.lat_map)
+        #Normalize array
+        temp_map = cm.normalize_map(temp_map)
 
-        params = [k,p,d,e,self.h_l_ratio,T]
-        slopes = np.gradient(self.surf_h_map)
-        wind_x = self.wind_x
-        wind_y = self.wind_y
-        humidity = climate_solver.humidity_sim(wind_x, wind_y, nx, ny, nt, dt, self.init_evap, self.surf_h_map, self.temps, slopes,params) 
-        print('test')
-        #Normalize all humidity maps to 0-1
-        for n in range(1,len(humidity) - 1):
-            #humidity[n] = np.where(self.h_map < self.water_level, humidity[n], np.exp(humidity[n]))         #Amplify humidity over land
-            humidity[n] = self.normalize_map(humidity[n])
-            
-        return humidity
-
-    def gen_temp_map(self, t):
-        """
-        Temperature depends on elevation and latitude and month of the year
-        Temperature cycle over the year is modeled by a sine function
-        Total effect of latitude depends on a base latitude map that reduces temperature near the poles
-        Two other latitude maps have highest values either at the south or the north pole
-        Total effect of latitude is found by weighting north and south latitude effect based on month, then added to the base latitude
-        TODO: Implement offset season for northern and southern hemisphere
-        """
-        #temp_map = np.where(self.h_map < self.water_level, self.water_level + 0.1, self.h_map)        #Transform ocean to uniform height
-
-        temp_map = (self.h_map - 1.0) * (-1.0)
-
-        latmap = noisegen.LatMap(self.height, self.length)
-        latitude_base = latmap.gen_lat_map()
-        latitude_south = latmap.gen_lat_map(symmetric = False)
-        latitude_south = latmap.invert_map(latitude_south)      #Invert one latitude map so that the poles will cycle
-        latitude_north = latmap.gen_lat_map(symmetric = False)
-        
-        latitude_ns = np.sin(latitude_north * t/11 + latitude_south * (12 - t)/11)
-        latitude = latitude_ns * 0.05 + latitude_base
-        latitude = self.normalize_map(latitude)
-        temp_map = (temp_map * latitude)
-        
-        #Even out temperature over the ocean
-        #temp_map = np.where(self.h_map < self.water_level, temp_map - 0.05, temp_map)
-        #Normalize
-        temp_map = self.normalize_map(temp_map)
         return temp_map
 
-    def gen_evap_map(self):
+    def gen_init_humidity(self):
         """
-        Evaporation depends on whether the point is below the water level (is ocean/water) and temperature
+        Generate an initial humidity map based on temperature and a height map
         """
+        cm = ClimateMap(self.size_y, self.size_x, self.height_map)
+        humid_Map = cm.gen_humid_map(self.init_temp)
+        #Normalize array
+        humid_Map = cm.normalize_map(humid_Map)
 
-        temp_map = self.temps[0]
-        ocean_evap = 1.1      #Strength of evaporation over ocean relative to land
-        freezing_evap = 0.5
+        return humid_Map
 
-        evap_map = np.zeros((self.height, self.length))
-        evap_map = np.where(self.h_map <= self.water_level, ocean_evap * temp_map, temp_map)        #Evaporation is strongest over the ocean
-        evap_map = np.where(temp_map <= self.freeze_point, freezing_evap * evap_map, evap_map)      #Evaporation is lower if below freezing
-        evap_map = self.normalize_map(evap_map)
-        return evap_map
+    def gen_temp_cycle(self):
+        """
+        Generate a temprature cycle for a year
+        Returns an array of temp maps 
+        """
+        temp_maps = np.zeros((self.sim_length,self.size_x, self.size_y))
+        latmap = ng.LatMap(self.size_x, self.size_y)
+        temp_map = self.init_temp
+
+        #Generate one sided latitude maps to be used for cycling the temperature
+        season_map_s = latmap.gen_lat_map(symmetric = False, invert = True)
+        season_map_n = latmap.gen_lat_map(symmetric = False, invert = False)
+        plt.imsave('season_map_n.png', season_map_n)
+        plt.imsave('season_map_s.png', season_map_s)
+        #season_map_south = latmap.invert_map(season_map_north)
+
+        #Define parameters used to create a sine function with period of 365 days and a peak at the autumnal equinox
+        A = math.pi * 2 / 365
+        B = 81.75
+        B2 = 92.75
+        #Paramaeter for the strength of the seasonal effect
+        C = 0.25
+
+
+        for t in range(self.sim_length):
+            #season_map_t = 0.5 * (season_map_n * np.abs(90 - t) / 365 + season_map_s * np.abs(t - 270) / 365)
+            #season_map_t = np.sin(A * (t - B)) * season_map_n + np.sin(A * (173 - t - B)) * season_map_s
+            season_map_t = np.sin(A * (t - B)) * season_map_n + np.sin(A * (B - t)) * season_map_s
+            #season_map_nt = np.sin(A * (t - B)) * season_map_n
+            #season_map_t = season_map_nt + season_map_st
+            #season_map_south_t = np.sin(A * (t - B)) * season_map_south
+            
+            season_map_t = self.normalize_array(season_map_t)
+
+            temp_map = self.init_temp + C * season_map_t
+
+            #temp_map = self.init_temp * season_map_t
+
+            #Normalize temperature
+            temp_map = self.normalize_array(temp_map)
+            temp_maps[t] = temp_map
+
+        self.season_map = season_map_t
+        return temp_maps
+
+
+    def normalize_array(self, array):
+        array_norm = (array - array.min())/(array.max() - array.min())
+        return array_norm
+
+    def scale_array(self, factor, array):
+        """
+        Scales down the size of an array by a factor to create a more coarse grid for weather simulation
+        If the original world size is 1024x512, and the factor is 4, then this will return an array that is 256x128
+        Then creates an array of the original size 
+        """
+        x_y_ratio = self.size_x / self.size_y
+        y_factor = int(factor / x_y_ratio)
+        new_array = array[0:int(self.size_y / factor):y_factor, 0:int(self.size_x / factor):factor]
+        
+        return new_array
+
+class ClimateMap():
+
+    def __init__(self, size_x, size_y, height_map):
+
+        self.height_map = height_map
+        self.size_x = size_x
+        self.size_y = size_y
 
     def normalize_map(self, amap):
-        norm_map = (amap - amap.min()) / (amap.max() - amap.min())
-        return norm_map
+        amap_norm = (amap - amap.min())/(amap.max() - amap.min())
+        return amap_norm
 
-    def avg_map(self, map_set):
+    def gen_temp_map(self, lat_map):
         """
-        Calculate an average map from a set of maps, for example a sequence of temperature maps
+        Generate an initial temperature map based on latitude and a height map
+        The initial temperature is around the autumnal equinox so that temperature is 
         """
-        avg_map = np.mean(map_set,axis = 0)
-        print("Map shape:")
-        print(avg_map.shape)
-        return avg_map
+        h_map = self.height_map
+        h_map = (h_map - 1.0) * (-1.0)  #Invert height map for temperature calculation so that lowest points have the highest temperature
+        lat_factor = 0.5       #Relative importance of latitude for temperature
+        #temp_map = (1 - lat_factor) * h_map + lat_factor * lat_map
+        temp_map = h_map * lat_map
+        temp_map = gaussian_filter(temp_map, sigma = 1)     #Smooth temperature map with gaussian filter
+        #Normalize array
+        temp_map = self.normalize_map(temp_map)
+
+        return temp_map
+
+    def gen_humid_map(self, temp_map):
+        """
+        Generate an initial humidity map based on a height map and a latitude map, with equatorial latitutes having higher humidity
+        """
+        #humid_map = np.exp(temp_map)
+        #humid_map = self.normalize_map(humid_map)
+        rand_seed = random.randint(0,100000)
+        noise_map = ng.NoiseMap(self.size_y, self.size_x)
+        humid_map = noise_map.gen_simplex_map(scale = self.size_x / 4.0, octa = 5, pers = 0.6, lac = 2.3, seed = rand_seed)
+        lat_map = ng.LatMap(self.size_y, self.size_x)
+        latitudes = lat_map.gen_lat_map()
+        humid_map = humid_map * latitudes
+
+        return humid_map
+
+    def surface_map(self, level):
+        """
+        The surface map is a map but with values under or equal to the level value equal to the level
+        """
+        surf_map = np.where(self.height_map <= level, level, self.height_map)
+        return surf_map
+
+    def land_map(self, level):
+        """
+        Create a map that is equal to 1 over a given level and 0 under
+        Used to create land ocean binary maps for example
+        """
+        land_map = self.height_map
+        land_map = np.where(land_map > level, 1, 0)
+        return land_map
+
+    
