@@ -7,11 +7,39 @@ import climate_solver
 import open3d
 import colors
 from scipy.ndimage import gaussian_filter
+from scipy.ndimage import interpolation
 from PIL import Image
 from matplotlib import pyplot as plt
 
-COLORS = colors.COLORS
 
+BLANK = [0,0,0]
+DEEP_OCEAN = [30,75,235]
+OCEAN = [65,105,225]
+FORREST = [95,156,23]
+TROPICAL = [29,120,88]
+SAVANNAH = [204,217,65]
+SAND = [238, 214, 175]
+SNOW = [245, 245, 240]
+ICE = [220,220,250]
+MOUNTAIN = [139, 137, 137]
+HIGH_MOUNTAIN = [99,95,95]
+TUNDRA = [152,121,101]
+BORREAL_FORREST = [33,82,16]
+DRY_GRASS = [123,148,40]
+MARSHLAND = [74,161,146]
+
+COLORS = [DEEP_OCEAN,OCEAN, FORREST, TROPICAL, SAVANNAH,\
+          SAND, SNOW, ICE, MOUNTAIN, TUNDRA, DRY_GRASS, MARSHLAND,\
+          BORREAL_FORREST]
+
+
+class Planet:
+
+
+    def __init__(self, radius):
+
+        self.radius = radius
+        
 
 class Terrain:
 
@@ -26,7 +54,7 @@ class Terrain:
         self.periods = periods
         self.water_level = water_level
         self.beach_zone = self.water_level + 0.03
-        self.freeze_pnt = 0.25
+        self.freeze_pnt = 0.2
 
         #Generate height map and slopes for the height map in the x and y direction
         self.create_height_map()
@@ -44,22 +72,26 @@ class Terrain:
         self.terrain_maps = self.apply_temperatures()
 
 
-    def create_height_map(self):
+    def create_height_map(self, voronoi_factor = 0.75):
+        """
+
+        """
         scale = self.size_x / 4.0
         octaves = 6
         lacunarity = 2.3
         persistence = 0.61
-        voronoi_factor = 0.45
         seed = random.randint(0,100000)
         noisemap = ng.NoiseMap(self.size_x, self.size_y)
         
-        voronoi_map = noisemap.gen_voronoi_map(128)
+        voronoi_map = noisemap.gen_voronoi_map(32)
         height_map = noisemap.gen_simplex_map(scale, octaves, persistence, lacunarity, seed)
 
         self.height_map = voronoi_factor * voronoi_map + height_map
         self.height_map = ((self.height_map - self.height_map.min()) / (self.height_map.max() - self.height_map.min()))
         
         self.sea_level_height_map = np.where(self.height_map <= self.water_level, self.water_level, self.height_map)
+
+        print("Height map generated")
         #self.height_map = np.where(self.height_map <= self.water_level, self.water_level - 0.01, self.height_map)
         
     
@@ -111,9 +143,9 @@ class Terrain:
         tundra_temp_perim = 0.25    #Temperature below which terrain is tundra
         tropics_temp_perim = 0.4    #Temperature above which is tropical zone (savannah and tropical)
 
-        desert_humid = 0.2      #Humidity value below which zone is desert
-        forrest_humid = 0.3    #Humidity for forrest or savannah
-        wetland_humid = 0.4   #Humidity above which we have wetlands (rainforest or marshland)
+        desert_humid = 0.25      #Humidity value below which zone is desert
+        forrest_humid = 0.35    #Humidity for forrest or savannah
+        wetland_humid = 0.45   #Humidity above which we have wetlands (rainforest or marshland)
         tundra_humid_perim = 0.10
 
         deep_water_lev = 0.8 * self.water_level 
@@ -148,6 +180,8 @@ class Terrain:
         #Determine deep ocean  zone
         biome_map = np.where((heights < deep_water_lev),DEEP_OCEAN,biome_map)
         
+        print("Biomes generated")
+
         return biome_map
 
 
@@ -162,7 +196,7 @@ class Terrain:
 
 class Climate:
 
-    def __init__(self, size, height_map, freeze_point, water_level, sim_length, slopes, deltas = [8,8]):
+    def __init__(self, size, height_map, freeze_point, water_level, sim_length, slopes, deltas = [8,8,0.01]):
         
         self.size_x = size[0]
         self.size_y = size[1]
@@ -182,6 +216,8 @@ class Climate:
         self.downscale_simulation()
 
         self.wind_map = self.wind_sim()
+        self.wt_map = self.wind_heat_sim()
+        self.wind_map = self.upscale_simulation()
 
     def downscale_simulation(self):
         """
@@ -191,18 +227,9 @@ class Climate:
         
         scaled_x = int(self.size_x / self.deltas[0])
         scaled_y = int(self.size_y / self.deltas[1])
-        """
-        img_temp = Image.fromarray(self.init_temp).convert('RGB')
-        img_humid = Image.fromarray(self.init_humidity)
-        img_heights = Image.fromarray(self.init_temp)
 
-        img_temp = img_temp.resize((scaled_x, scaled_y))
-        img_humid = img_temp.resize((scaled_x, scaled_y))
-        img_heights = img_temp.resize((scaled_x, scaled_y))
-
-        img_temp.save('scaled_temp.png')
-        """
-        self.temp_scaled = self.init_temp[::self.deltas[1], ::self.deltas[0]]
+        temp = self.temp_maps[int(self.sim_length / 4.0)]       #Use a temp map for the spring equinox (roughly) so that temperature is equal at both poles
+        self.temp_scaled = temp[::self.deltas[1], ::self.deltas[0]]
         self.humid_scaled = self.init_humidity[::self.deltas[1], ::self.deltas[0]]
         self.heights_scaled = self.height_map[::self.deltas[1], ::self.deltas[0]]
         self.lat_map_scaled = self.lat_map[::self.deltas[1], ::self.deltas[0]]
@@ -213,24 +240,39 @@ class Climate:
         plt.imsave('temp_scaled.png',self.temp_scaled, cmap = 'hot')
 
     def upscale_simulation(self):
+        #Only select 24 maps (one day or 24 hours) to be interpolated and returned to the wind maps
+        t_count = 24
+        wind_x = np.zeros((t_count, self.size_x, self.size_y))
+        wind_y = np.zeros((t_count, self.size_x, self.size_y))
+        temp = np.zeros((t_count, self.size_x, self.size_y))
+        """
+        for t in range(t_count):
+            nt = int(t / self.deltas[2])
+            wind_x[t] = interpolation.zoom(self.wt_map[0][nt], zoom = [self.deltas[0], self.deltas[1]])
+            wind_y[t] = interpolation.zoom(self.wt_map[1][nt], zoom = [self.deltas[0], self.deltas[1]])
+            temp[t] = interpolation.zoom(self.wt_map[2][nt], zoom = [self.deltas[0], self.deltas[1]])
+        """
+        for t in range(t_count):
+            nt = int(t / self.deltas[2])
+            wind_x[t] = interpolation.zoom(self.wind_map[0][nt], zoom = [self.deltas[0], self.deltas[1]])
+            wind_y[t] = interpolation.zoom(self.wind_map[1][nt], zoom = [self.deltas[0], self.deltas[1]])
 
-        pass
-
+        return wind_x, wind_y, temp
         
 
-    def wind_sim(self, scale_factor = 4, dt = 1.0, dx = 1.0, dy = 1.0):
+    def wind_sim(self):
         """
         Create a setup for wind simulation using Numba
         """
         nx = int(self.size_x / self.deltas[0])
         ny = int(self.size_y / self.deltas[1])
+        dt = self.deltas[2]
         lat_map_inv = self.lat_map_inv_scaled
         lat_map = self.lat_map_scaled
         height_map = self.heights_scaled
         temp = self.temp_scaled
         temp_gradient = np.gradient(temp)
         
-
         
         #Create a surface map with ocean level being flat
         cm = ClimateMap(nx, ny, height_map)
@@ -239,8 +281,34 @@ class Climate:
         land_map = cm.land_map(self.water_level)
     
         #wind = climate_solver.wind_heat_ns(nx, ny, dt, lat_map_inv, surface_map, temp, temp_gradient, slopes, lat_map, land_map)
-        wind = climate_solver.wind_sim(nx, ny, dt, lat_map_inv, surface_map, temp_gradient, slopes)
+        wind = climate_solver.wind_sim(nx, ny, dt, lat_map_inv, temp_gradient, slopes)
+        "Wind simulation complete"
         return wind
+
+    def wind_heat_sim(self):
+        """
+        Create a setup for coupled wind and heat simulation using Numba
+        """
+        nx = int(self.size_x / self.deltas[0])
+        ny = int(self.size_y / self.deltas[1])
+        dt = self.deltas[2]
+        lat_map_inv = self.lat_map_inv_scaled
+        lat_map = self.lat_map_scaled
+        height_map = self.heights_scaled
+        temp = self.temp_scaled
+        temp_gradient = np.gradient(temp)
+        
+        
+        #Create a surface map with ocean level being flat
+        cm = ClimateMap(nx, ny, height_map)
+        surface_map = cm.surface_map(self.water_level)
+        slopes = np.gradient(surface_map)
+        land_map = cm.land_map(self.water_level)
+        print(lat_map_inv.shape)
+        #wind = climate_solver.wind_heat_ns(nx, ny, dt, lat_map_inv, surface_map, temp, temp_gradient, slopes, lat_map, land_map)
+        wind_heat = climate_solver.wind_heat_sim(nx, ny, dt, lat_map_inv, temp, slopes)
+        "Wind simulation complete"
+        return wind_heat
 
     def create_latmap(self):
 
@@ -283,40 +351,30 @@ class Climate:
         latmap = ng.LatMap(self.size_x, self.size_y)
         temp_map = self.init_temp
 
-        #Generate one sided latitude maps to be used for cycling the temperature
-        season_map_s = latmap.gen_lat_map(symmetric = False, invert = True)
+        #Generate one sided latitude map to be used for cycling the temperature
         season_map_n = latmap.gen_lat_map(symmetric = False, invert = False)
-        plt.imsave('season_map_n.png', season_map_n)
-        plt.imsave('season_map_s.png', season_map_s)
+
         #season_map_south = latmap.invert_map(season_map_north)
 
         #Define parameters used to create a sine function with period of 365 days and a peak at the autumnal equinox
-        A = math.pi * 2 / 365
+        A = math.pi * (2 / 365)
         B = 81.75
         B2 = 92.75
         #Paramaeter for the strength of the seasonal effect
-        C = 0.25
+        C = 0.15
 
 
         for t in range(self.sim_length):
-            #season_map_t = 0.5 * (season_map_n * np.abs(90 - t) / 365 + season_map_s * np.abs(t - 270) / 365)
-            #season_map_t = np.sin(A * (t - B)) * season_map_n + np.sin(A * (173 - t - B)) * season_map_s
-            season_map_t = np.sin(A * (t - B)) * season_map_n + np.sin(A * (B - t)) * season_map_s
-            #season_map_nt = np.sin(A * (t - B)) * season_map_n
-            #season_map_t = season_map_nt + season_map_st
-            #season_map_south_t = np.sin(A * (t - B)) * season_map_south
-            
+            season_map_t = abs(season_map_n - t/365)
             season_map_t = self.normalize_array(season_map_t)
-
             temp_map = self.init_temp + C * season_map_t
-
-            #temp_map = self.init_temp * season_map_t
 
             #Normalize temperature
             temp_map = self.normalize_array(temp_map)
             temp_maps[t] = temp_map
 
         self.season_map = season_map_t
+        print("Temperature cycle complete")
         return temp_maps
 
 
